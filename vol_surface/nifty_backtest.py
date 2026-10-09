@@ -321,7 +321,7 @@ def run(cfg, store_path, out_dir):
     every = int(cfg.get("entry_every_n_days", 5))
     check = int(cfg.get("check_every_minutes", 15))
     stale = int(cfg.get("max_stale_minutes", 30))
-    trades, dropped = [], {"no expiry data": 0, "legs never priced": 0}
+    trades, dropped = [], {"no expiry data": 0, "legs never priced": 0, "stale prices (no-arbitrage)": 0}
     for di, d in enumerate(store.dates):
         if di % every or d not in bar_by or bar_by[d] < 25:
             continue
@@ -351,6 +351,8 @@ def run(cfg, store_path, out_dir):
         E = eng.expected_move(prev["close"], v_prev) if v_prev else prev["close"] * vfc["forecast"] / math.sqrt(252)
         z = (S - prev["close"]) / E
         reg = eng.regime(S, prev, vfc, z, rules)
+        if prev["high"] == prev["low"]:         # end-of-day data: no intraday range, breakout test meaningless
+            reg = dict(reg, label="n/a")
         lot = lot_size(d, cfg, exp)
         for fam, legs in build(snap, exp, F, T, rules, vix.get(prev["date"]), has_ba).items():
             dl = snap[(exp, legs[0][0], legs[0][1])].get("lot")
@@ -360,6 +362,9 @@ def run(cfg, store_path, out_dir):
             for k, t, n in legs:
                 px, src = fill(snap[(exp, k, t)], n, n, has_ba, c)
                 entry.append(dict(expiry=exp, strike=k, type=t, lots=n, price=px))
+            if not _arb_ok(entry):              # stale closing prices (e.g. a wing last traded hours earlier)
+                dropped["stale prices (no-arbitrage)"] += 1
+                continue
             net = -sum(l["lots"] * l["price"] for l in entry) * lot
             idea = dict(legs=[dict(l) for l in entry], net=net, eval={"cost": 0.0})
             plan = exit_plan(idea, rules, pd.Timestamp(d).date())
@@ -382,6 +387,18 @@ def run(cfg, store_path, out_dir):
                                costs=round(entry_cost + res["exit_cost"], 2), lot_size=lot))
         print(f"{d}: {len(trades)} trades so far", end="\r")
     write_outputs(trades, store, out_dir, cfg, dropped)
+
+
+def _arb_ok(entry):
+    """Each vertical must be worth more than 0 and less than its width at entry."""
+    for typ in ("PE", "CE"):
+        v = sorted((l["strike"], l["price"]) for l in entry if l["type"] == typ)
+        if len(v) == 2:
+            (k1, p1), (k2, p2) = v
+            val = p2 - p1 if typ == "PE" else p1 - p2
+            if not 0 < val < k2 - k1:
+                return False
+    return True
 
 
 def _edge_label(snap, exp, S, T, vfc, has_ba, rules):
@@ -529,7 +546,7 @@ def write_outputs(trades, store, out_dir, cfg, dropped=None):
                  dropped=dropped or {},
                  families={f: _stats([t for t in trades if t["family"] == f]) for f in fams},
                  by_regime={f: {r: _stats([t for t in trades if t["family"] == f and t["regime"] == r])
-                                for r in ("Range", "Trend", "Mixed")} for f in fams},
+                                for r in ("Range", "Trend", "Mixed", "n/a")} for f in fams},
                  by_vol_edge={f: {v: _stats([t for t in trades if t["family"] == f and t["vol_edge"] == v])
                                   for v in ("Rich", "Fair", "Cheap")} for f in fams})
     # the dashboard's "condor" family uses the delta-based condor; keep the range one separately

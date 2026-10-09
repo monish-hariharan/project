@@ -136,7 +136,7 @@ def history(backtest, paper, min_trades=20, regime=None):
         if by_reg and by_reg.get("n", 0) >= min_trades:
             bt = dict(by_reg, source=f"backtest {period}, {regime} regime".strip())
         elif bt:
-            bt = dict(bt, source=f"backtest {period}".strip())
+            bt = dict(bt, source=f"backtest {bt.get('period', period)}".strip())
         pp = paper.get(f)
         pick = bt if bt and bt.get("n", 0) >= min_trades else pp if pp and pp["n"] >= min_trades else None
         out[f] = pick
