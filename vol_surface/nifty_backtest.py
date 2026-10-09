@@ -306,7 +306,14 @@ def run(cfg, store_path, out_dir):
     import nifty_engine as eng
     from nifty_costs import load_costs
     from nifty_risk import exit_plan, load_rules
-    rules = load_rules(cfg.get("rules", HERE / "rules.json"))
+    rp = Path(cfg.get("rules", HERE / "rules.json"))
+    if not rp.exists() and (HERE / rp).exists():
+        rp = HERE / rp
+    if not rp.exists():
+        raise SystemExit(f"rules file not found: {rp}")
+    rules = load_rules(rp)
+    print(f"rules: {rp} (min_days {rules['min_days']}, exit {rules['credit_exit_days_before_expiry']} "
+          f"credit / {rules['debit_exit_days_before_expiry']} debit trading days before expiry)")
     c = load_costs(cfg.get("costs", HERE / "costs.json"))
     store = Store(store_path)
     print(f"{len(store.dates)} trading days in store; building daily bars...")
