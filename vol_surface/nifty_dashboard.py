@@ -89,6 +89,7 @@ def main():
     ap.add_argument("--today-ohlc", help="open,high,low of today's session so far")
     ap.add_argument("--rate", type=float, default=0.055)
     ap.add_argument("--out", default="output")
+    ap.add_argument("--page", help="also write a body-only fragment for publishing as a web page")
     a = ap.parse_args()
 
     now = datetime.strptime(a.asof, "%Y-%m-%d %H:%M").replace(tzinfo=IST)
@@ -169,7 +170,7 @@ def main():
     tag = now.strftime("%Y-%m-%d")
     write_tables(out, tag, table, summary)
     html = write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary,
-                           d, c, ret, rv, today)
+                           d, c, ret, rv, today, a.page)
     print_report(summary, rv, today)
     print(f"\nDashboard: {html.resolve()}")
 
@@ -211,7 +212,7 @@ def print_report(summary, rv, today):
 
 
 def write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary,
-                    dates, closes, ret, rv, today):
+                    dates, closes, ret, rv, today, page_path=None):
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
@@ -268,7 +269,7 @@ def write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary
     for s in (sig, -sig):
         f.add_trace(go.Scatter(x=[x[0], x[-1]], y=[s, s], mode="lines", showlegend=s > 0,
                                name=f"±1σ implied ({sig:.2f}%)",
-                               line=dict(dash="dash", color="#555")), row=1, col=1)
+                               line=dict(dash="dash", color="#8a919c")), row=1, col=1)
     lbl = [f"{s['expiry'][5:]} ({s['tdays']}td)" for s in summary]
     for key, name in (("implied_move", "Straddle (implied)"), ("rv_move", "RV20-based"),
                       ("hist_median_move", "Historical median")):
@@ -305,26 +306,75 @@ def write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary
                       f"range {today['range']*100:.2f}%). Implied 1σ day from front ATM IV is "
                       f"{today['sigma_day']*100:.2f}%, so today is a <b>{today['z']:+.2f}σ</b> move.</p>")
 
-    body = "".join(fg.to_html(full_html=False, include_plotlyjs="cdn" if i == 0 else False)
-                   for i, fg in enumerate(figs))
-    html = f"""<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>NIFTY options dashboard</title>
-<style>body{{font-family:system-ui,sans-serif;margin:16px;color:#222;background:#fff}}
-table{{border-collapse:collapse;margin:8px 0 20px;font-size:13px}}
-td,th{{border:1px solid #ddd;padding:4px 8px;text-align:right}} th{{background:#f4f4f4}}
-.wrap{{overflow-x:auto}}</style></head><body>
-<h2>NIFTY 50 options — {now:%d %b %Y %H:%M} IST, spot {S:,.2f}</h2>
-{today_html}
-<h3>Expiry summary</h3><div class="wrap">{sm_tbl}</div>
-<h3>Realised volatility (last {len(closes)} sessions)</h3>{rv_tbl}
+    # charts read on both light and dark pages: transparent ground, mid-grey ink
+    ink, grid = "#8a919c", "rgba(138,145,156,0.25)"
+    axis = dict(gridcolor=grid, zerolinecolor=grid, linecolor=grid)
+    for fg in figs:
+        fg.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                         font=dict(color=ink, family="IBM Plex Sans, system-ui, sans-serif"),
+                         legend=dict(bgcolor="rgba(0,0,0,0)"), margin=dict(l=50, r=20, t=60, b=40))
+        fg.update_xaxes(**axis)
+        fg.update_yaxes(**axis)
+    scene_axis = dict(backgroundcolor="rgba(0,0,0,0)", gridcolor=grid, zerolinecolor=grid)
+    figs[0].update_scenes(xaxis=scene_axis, yaxis=scene_axis, zaxis=scene_axis)
+
+    body = "".join(f'<section class="chart">{fg.to_html(full_html=False, include_plotlyjs=False, config=dict(responsive=True, displaylogo=False))}</section>'
+                   for fg in figs)
+    page = f"""<title>NIFTY Options Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.35.2/plotly.min.js"></script>
+<style>
+/* Layout: one reading column, summary tables first, charts below, each table scrolls inside itself */
+:root {{
+  --bg: #f7f8fa; --surface: #ffffff; --fg: #1b2230; --muted: #5d6676;
+  --rule: #dde1e8; --accent: #1f6f8b; --up: #1a7f4b; --down: #b3261e;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}}
+@media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{
+  --bg: #12161d; --surface: #1a2029; --fg: #e4e8ee; --muted: #9aa3b0;
+  --rule: #2c3440; --accent: #5fb3cf; --up: #4cc38a; --down: #ff7b72; color-scheme: dark }} }}
+:root[data-theme="dark"] {{
+  --bg: #12161d; --surface: #1a2029; --fg: #e4e8ee; --muted: #9aa3b0;
+  --rule: #2c3440; --accent: #5fb3cf; --up: #4cc38a; --down: #ff7b72; color-scheme: dark }}
+body {{ background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 14px; line-height: 1.5 }}
+main {{ max-width: 1180px; margin: 0 auto; padding-inline: 16px; padding-block: 24px 40px;
+        display: grid; gap: 20px }}
+header {{ display: grid; gap: 4px }}
+.eyebrow {{ font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent) }}
+h1 {{ font-size: clamp(22px, 3vw, 30px); font-weight: 600; margin: 0; text-wrap: balance }}
+h2 {{ font-size: 16px; font-weight: 600; margin: 0 0 8px }}
+.today {{ background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; margin: 0; max-width: 75ch }}
+.today b {{ font-family: var(--mono) }}
+.wrap {{ overflow-x: auto; min-width: 0 }}
+table {{ border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; background: var(--surface) }}
+th, td {{ border-bottom: 1px solid var(--rule); padding: 6px 10px; text-align: right; white-space: nowrap }}
+th {{ color: var(--muted); font-weight: 500; font-size: 12px; text-align: right; border-bottom-color: var(--fg) }}
+td:first-child, th:first-child {{ text-align: left; font-family: var(--mono) }}
+.chart {{ background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; min-width: 0; overflow: hidden }}
+.notes {{ font-size: 12px; color: var(--muted); max-width: 90ch; margin: 0 }}
+</style>
+<main>
+<header>
+  <span class="eyebrow">NSE · NIFTY 50 index options · Dhan API</span>
+  <h1>{now:%d %b %Y}, {now:%H:%M} IST · spot {S:,.2f}</h1>
+</header>
+{today_html.replace('<p>', '<p class="today">')}
+<section><h2>Expiry summary</h2><div class="wrap">{sm_tbl}</div></section>
+<section><h2>Realised volatility, last {len(closes)} sessions</h2><div class="wrap">{rv_tbl}</div></section>
 {body}
-<p style="font-size:12px;color:#666">Source: Dhan API v2 option chain (LTP, OI) and daily candles.
-Greeks: Black-76 on parity-implied forward, lot size {LOT}. Theta = 1 calendar day of decay.
-Implied move = ATM straddle / spot. RV20 move = 20d close-to-close vol × √(trading days/252) × √(2/π).
-Historical median = median |log move| over all past windows of the same trading-day length
-(n = number of overlapping windows; with ~60 sessions of history, long-dated rows rest on very few and are mostly one trend).</p>
-</body></html>"""
+<p class="notes">Source: Dhan API v2 option chain (last traded price, open interest) and daily candles.
+Greeks: Black-76 on the put-call-parity forward, lot size {LOT}; theta is one calendar day of decay.
+Implied move = ATM straddle / spot. RV20 move = 20-day close-to-close vol × √(trading days/252) × √(2/π).
+Historical median = median absolute move over past windows of the same trading-day length;
+n is the number of overlapping windows, and long-dated rows rest on very few, mostly from one trend.</p>
+</main>"""
+    if page_path:
+        Path(page_path).write_text(page)
+    html = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'</head><body>{page}</body></html>')
     path = out / f"nifty_dashboard_{tag}.html"
     path.write_text(html)
     return path
