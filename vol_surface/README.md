@@ -19,3 +19,15 @@ from the bid/ask mid with Black-76 (falling back to LTP, then to Dhan's own IV).
 OTM options are used. The surface is interpolated in total-variance space with
 non-decreasing variance across expiries.
 Dhan rate-limits the option chain to one request every 3 s, so 6 expiries take about 20 s.
+
+## Greeks, liquidity and realised moves
+
+`nifty_dashboard.py` adds per-strike Black-76 Greeks (delta, gamma, theta ₹/day, vega ₹/vol-pt;
+per lot = ×65), open-interest liquidity, realised volatility (close-to-close 5/10/20/60d,
+Parkinson, Garman-Klass) and implied (ATM straddle) vs realised moves per expiry:
+
+```bash
+python nifty_dashboard.py --chain data/nifty_chain_2026-10-09.csv \
+  --daily data/nifty_daily_2026-10-09.csv --spot 22496.50 --asof "2026-10-09 10:44" \
+  --today-ohlc 22350.05,22515.95,22294.75
+```
