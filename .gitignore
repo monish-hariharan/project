@@ -1,2 +1,3 @@
 __pycache__/
 vol_surface/output/download/
+vol_surface/*.zip
