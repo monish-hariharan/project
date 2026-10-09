@@ -60,12 +60,19 @@ def exit_plan(idea, rules, today: date):
     if net > 0:                                         # credit structure
         tp = rules["credit_take_profit_pct"] / 100
         m = rules["credit_stop_loss_multiple"]
+        # defined-risk structures: never set the stop beyond what the spread can lose
+        ml = idea.get("max_loss")
+        if ml is None:
+            from nifty_strategies import _describe
+            ml = _describe([dict(l, delta=0, gamma=0, theta=0, vega=0) for l in legs]).get("max_loss")
+        if ml is not None and not math.isinf(ml) and ml < 0:
+            m = min(m, rules.get("stop_max_loss_fraction", 0.5) * -ml / net)
         ex = _exit_date(first_exp, rules["credit_exit_days_before_expiry"])
         plan = dict(
             kind="credit",
             take_profit=f"Buy back for ≤ ₹{net*(1-tp):,.0f}/lot (keeps {tp*100:.0f}% of the "
                         f"₹{net:,.0f} credit, ≈ ₹{net*tp - cost:,.0f} after costs)",
-            stop_loss=f"Close if buy-back cost reaches ₹{net*(1+m):,.0f}/lot (loss ≈ {m:g}× credit, "
+            stop_loss=f"Close if buy-back cost reaches ₹{net*(1+m):,.0f}/lot (loss ≈ {m:.2f}× credit, "
                       f"₹{net*m + cost:,.0f} with costs)"
                       + ("" if not shorts else ", or as soon as spot trades through a short strike ("
                          + ", ".join(f"{k:.0f} {t}" for k, t in shorts) + ")"),

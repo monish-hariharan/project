@@ -27,5 +27,6 @@
   "wing_width": 200,
   "debit_width": 200,
   "min_leg_oi_lots": 1000,
-  "event_dates": []
+  "event_dates": [],
+  "stop_max_loss_fraction": 0.5
 }

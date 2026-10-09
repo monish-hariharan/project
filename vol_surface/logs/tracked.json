@@ -40,12 +40,12 @@
       "exit": {
         "kind": "credit",
         "take_profit": "Buy back for \u2264 \u20b92,390/lot (keeps 50% of the \u20b94,781 credit, \u2248 \u20b92,390 after costs)",
-        "stop_loss": "Close if buy-back cost reaches \u20b914,342/lot (loss \u2248 2\u00d7 credit, \u20b99,562 with costs), or as soon as spot trades through a short strike (21800 PE, 22900 CE)",
+        "stop_loss": "Close if buy-back cost reaches \u20b98,890/lot (loss \u2248 0.86\u00d7 credit, \u20b94,110 with costs), or as soon as spot trades through a short strike (21800 PE, 22900 CE)",
         "time_exit": "Close by 2026-10-22 (3 trading days before 2026-10-27) to avoid expiry-week gamma",
         "exit_date": "2026-10-22",
         "tp_close_cost": 2390.375,
-        "sl_close_cost": 14342.25,
-        "warn_close_cost": 9561.5,
+        "sl_close_cost": 8890.375000000002,
+        "warn_close_cost": 6835.562500000001,
         "days_held": 9,
         "short_strikes": [
           [
@@ -61,6 +61,20 @@
       "status": "open",
       "alerts_sent": [],
       "checks": [
+        {
+          "time": "2026-10-09 15:30",
+          "spot": 22520.45,
+          "value": -4819.75,
+          "pnl": -39.0,
+          "delta": -4.82,
+          "ltps": {
+            "2026-10-27|21600|PE": 37.75,
+            "2026-10-27|21800|PE": 53.6,
+            "2026-10-27|22900|CE": 134.9,
+            "2026-10-27|23100|CE": 76.6
+          },
+          "alerts": []
+        },
         {
           "time": "2026-10-09 15:30",
           "spot": 22520.45,
