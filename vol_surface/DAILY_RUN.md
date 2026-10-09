@@ -29,6 +29,7 @@ environment directly). Work on branch `claude/laughing-einstein-rnosdm`, in `vol
 8. **Deliver** — send `output/download/nifty_dashboard_<date>.html` (works offline) and
    `output/download/nifty_dashboard_<date>.xlsx` as attachments; republish the web page; commit
    data + CSV outputs and push.
-9. **Message** — 3–5 lines: spot/today's move, ATM IV vs realised, the favoured strategy idea
-   and why, the positions' net Greeks/P&L if any. Then ask the user to confirm their current
+9. **Message** — list every position alert first (stop loss, hedge, recentre, roll, time exit —
+   thresholds in `rules.json`), with the exact trade it proposes. Then 3–5 lines: spot/today's move, ATM IV vs realised, the best trade after costs
+   (or "stay flat") with its exit plan (take profit, stop loss, exit-by date), the positions' net Greeks/P&L if any. Then ask the user to confirm their current
    NIFTY positions (or send them if none were found).

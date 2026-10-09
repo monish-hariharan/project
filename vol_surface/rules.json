@@ -1,0 +1,16 @@
+{
+  "credit_take_profit_pct": 50,
+  "credit_stop_loss_multiple": 2.0,
+  "credit_exit_days_before_expiry": 3,
+  "debit_take_profit_pct": 50,
+  "debit_stop_loss_pct": 40,
+  "debit_exit_days_before_expiry": 1,
+  "short_strike_delta_alert": 0.35,
+  "short_strike_buffer_pct": 0.5,
+  "short_premium_warn_multiple": 1.5,
+  "short_premium_stop_multiple": 2.0,
+  "long_premium_stop_pct": 50,
+  "book_loss_alert_rs": 10000,
+  "hedge_delta_rs_per_pct": 5000,
+  "roll_days_before_expiry": 3
+}

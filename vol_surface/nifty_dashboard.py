@@ -25,6 +25,7 @@ import numpy as np
 from scipy.stats import norm
 
 from nifty_costs import load_costs, rank
+from nifty_risk import exit_plan, load_rules, position_alerts
 from nifty_strategies import analyse_positions, load_positions, scenario_pnl, suggest
 from nifty_vol_surface import (IST, black76, build_grid, chain_points, load_csv,
                                time_to_expiry)
@@ -94,6 +95,8 @@ def main():
     ap.add_argument("--page", help="also write a body-only fragment for publishing as a web page")
     ap.add_argument("--costs", default=str(Path(__file__).with_name("costs.json")),
                     help="broker charges and slippage settings (JSON)")
+    ap.add_argument("--rules", default=str(Path(__file__).with_name("rules.json")),
+                    help="exit and alert thresholds (JSON)")
     ap.add_argument("--positions", help="CSV of open positions: expiry,strike,type,lots,entry_price")
     a = ap.parse_args()
 
@@ -173,11 +176,15 @@ def main():
     ideas = suggest(table, summary, rv, today, S)
     costs = load_costs(a.costs)
     best = rank(ideas, S, rv["cc_20"], costs, alt_sigma=rv["cc_5"])
+    rules = load_rules(a.rules)
+    for i in ideas:
+        i["exit"] = exit_plan(i, rules, now.date())
     book = None
     if a.positions:
         analysed, missing = analyse_positions(load_positions(a.positions), table, S, greeks, a.rate)
         book = dict(rows=analysed, missing=missing,
                     scen=scenario_pnl(analysed, S, black76, a.rate) if analysed else [])
+        book["alerts"] = position_alerts(book, table, summary, S, rules, now.date())
 
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -193,6 +200,8 @@ def main():
         print(f"{'BEST ' if i['best'] else '     '}[{i['fit']}] {i['name']} {i['expiry']}: "
               f"net ₹{i['net']:,.0f}, costs ₹{e['cost']:,.0f}, EV ₹{e['ev']:,.0f} "
               f"(EV/risk {e['ev_on_risk']*100:+.1f}%, POP {e['pop']*100:.0f}%)")
+    for al in (book or {}).get("alerts", []):
+        print(f"ALERT [{al['level']}] {al['kind']}: {al['msg']}")
     print(f"Workbook: {xlsx.resolve()}")
     print_report(summary, rv, today)
     print(f"\nDashboard: {html.resolve()}")
@@ -249,7 +258,11 @@ def extra_sections(ideas, book, best, c):
 <p class="figs">{net} per lot before costs · {_rs(e['net_after'])} after costs<br>
 After costs: max profit {_rs(mp)} · max loss {_rs(ml)} · breakeven {be}<br>
 Δ {i['delta']:+.1f} · Γ {i['gamma']:+.3f} · Θ {_rs(i['theta'])}/day · vega {_rs(i['vega'])}/vol-pt (per lot)</p>
-{ev_html}<div class="wrap">{costs_html}</div>
+{ev_html}<div class="exit"><b>Exit plan</b><ul>
+<li><span class="tag">Take profit</span> {i['exit']['take_profit']}</li>
+<li><span class="tag">Stop loss</span> {i['exit']['stop_loss']}</li>
+<li><span class="tag">Exit by</span> {i['exit']['time_exit']}</li></ul></div>
+<div class="wrap">{costs_html}</div>
 </article>""")
     rank_rows = "".join(
         f"<tr{' class=\'bestrow\'' if i['best'] else ''}><td>{n}</td><td>{i['name']}</td><td>{i['expiry']}</td>"
@@ -302,7 +315,13 @@ After costs: max profit {_rs(mp)} · max loss {_rs(ml)} · breakeven {be}<br>
     if book["missing"]:
         miss = ("<p class='notes'>Not priced (expiry not in today's chain): " +
                 ", ".join(f"{m['expiry']} {m['strike']:.0f} {m['type']}" for m in book["missing"]) + "</p>")
+    lv = {"action": "bad", "warn": "warn", "info": "good"}
+    al = book.get("alerts", [])
+    alerts_html = ("<ul class='alerts'>" + "".join(
+        f"<li class='{lv[a['level']]}'><span class='pill {lv[a['level']]}'>{a['kind']}</span> {a['msg']}</li>"
+        for a in al) + "</ul>") if al else "<p class='notes'>No alerts: no stops, hedges, recentres or rolls needed today.</p>"
     html += f"""<section><h2>Your positions</h2>
+<h3>Alerts</h3>{alerts_html}
 <div class="wrap"><table><tr><th>Expiry</th><th>Option</th><th>Lots</th><th>Entry</th><th>LTP</th>
 <th>P&amp;L</th><th>IV</th><th>Δ (units)</th><th>Γ</th><th>Θ/day</th><th>Vega/pt</th></tr>{rows}</table></div>
 <h3>Spot shock, IV unchanged</h3><div class="wrap"><table><tr><th>Move</th>{scen}</tr><tr><td>P&amp;L</td>{scen_v}</tr></table></div>{miss}</section>"""
@@ -340,7 +359,8 @@ def write_workbook(path, now, S, summary, rv, table, ideas, book, costs):
                "Brokerage", "STT", "Exchange+SEBI", "Stamp", "GST", "Slippage", "Total cost",
                "Net after costs", "EV after costs (20d vol)", "EV after costs (5d vol)", "P(profit)",
                "Risk ₹", "EV / risk", "Max profit after costs", "Max loss after costs",
-               "Breakevens after costs", "Delta", "Gamma", "Theta ₹/day", "Vega ₹/pt", "Legs", "Reasons"])
+               "Breakevens after costs", "Delta", "Gamma", "Theta ₹/day", "Vega ₹/pt", "Legs", "Reasons",
+               "Take profit", "Stop loss", "Exit by date", "Time exit"])
     for n, i in enumerate(ideas, 1):
         e = i["eval"]
         ch = e["charges"]
@@ -355,7 +375,8 @@ def write_workbook(path, now, S, summary, rv, table, ideas, book, costs):
                    round(i["delta"], 1), round(i["gamma"], 4), round(i["theta"]), round(i["vega"]),
                    "; ".join(f"{'Buy' if l['lots'] > 0 else 'Sell'} {l['strike']:.0f}{l['type']} @ {l['price']}"
                              for l in i["legs"]),
-                   " ".join(i["reasons"])])
+                   " ".join(i["reasons"]), i["exit"]["take_profit"], i["exit"]["stop_loss"],
+                   i["exit"]["exit_date"], i["exit"]["time_exit"]])
 
     ws = wb.create_sheet("Greeks")
     ws.append(["Expiry", "Strike", "IV %", "CE LTP", "CE OI lots", "CE delta", "CE gamma",
@@ -384,6 +405,10 @@ def write_workbook(path, now, S, summary, rv, table, ideas, book, costs):
         ws.append(["Spot shock", "Spot", "P&L ₹"])
         for m, s_, v in book["scen"]:
             ws.append([f"{m*100:+.0f}%", round(s_), round(v)])
+        ws = wb.create_sheet("Alerts", 1)
+        ws.append(["Level", "Alert", "Detail"])
+        for a in book.get("alerts", []):
+            ws.append([a["level"], a["kind"], a["msg"]])
     for sheet in wb.worksheets:
         for row in sheet.iter_rows(min_row=1, max_row=3):
             for cell in row:
@@ -612,6 +637,13 @@ td:first-child, th:first-child {{ text-align: left; font-family: var(--mono) }}
 .pill {{ font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 10px; border: 1px solid currentColor }}
 .pill.best {{ background: var(--accent); color: var(--bg); border-color: var(--accent) }}
 tr.bestrow td {{ font-weight: 600; color: var(--accent) }}
+.exit {{ margin-top: 8px; font-size: 13px }}
+.exit ul {{ margin: 4px 0; padding-left: 0; list-style: none }}
+.tag {{ display: inline-block; min-width: 84px; font-family: var(--mono); font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em }}
+.alerts {{ list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 6px; max-width: 110ch }}
+.alerts li {{ background: var(--surface); border: 1px solid var(--rule); border-left: 3px solid var(--rule); border-radius: 4px; padding: 6px 10px }}
+.alerts li.bad {{ border-left-color: var(--down) }} .alerts li.warn {{ border-left-color: var(--warn) }} .alerts li.good {{ border-left-color: var(--up) }}
+.alerts li .pill {{ margin-right: 6px }}
 .rank td:nth-child(2), .rank th:nth-child(2) {{ text-align: left }}
 table.costs {{ margin-top: 8px; font-size: 12px }}
 table.costs td, table.costs th {{ padding: 2px 8px }}

@@ -39,3 +39,12 @@ exchange 0.035%, SEBI 0.0001%, stamp 0.003% buy, GST 18%, 2 orders per leg) and 
 Each strategy idea shows its full charge breakdown, P&L limits and breakevens after costs, and an
 expected P&L simulated at 20-day (and 5-day) realised vol. Ideas are ranked by EV / capital at risk;
 the top one is marked "Best trade" only if its EV after costs is positive.
+
+## Exit plans and position alerts
+
+`rules.json` sets the exit rules and alert thresholds. Every strategy idea gets a take-profit
+level, a stop loss (premium and spot trigger) and an exit-by date. With `--positions`, the
+dashboard raises alerts for: book loss beyond a limit, net delta beyond ₹ per 1% (with a futures
+or option hedge size), short strikes under pressure (recentre to the implied-move strike), short
+premium at the stop multiple, and legs near expiry (roll to the next month at the same
+moneyness, or exit long premium).
