@@ -1,0 +1,5 @@
+# Open NIFTY option positions. lots: + long, - short. entry_price per unit (index points).
+expiry,strike,type,lots,entry_price
+2026-10-27,22000,PE,-2,110.00
+2026-10-27,21700,PE,2,62.00
+2026-10-13,22500,CE,1,150.00

@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import norm
 
+from nifty_strategies import analyse_positions, load_positions, scenario_pnl, suggest
 from nifty_vol_surface import (IST, black76, build_grid, chain_points, load_csv,
                                time_to_expiry)
 
@@ -90,6 +91,7 @@ def main():
     ap.add_argument("--rate", type=float, default=0.055)
     ap.add_argument("--out", default="output")
     ap.add_argument("--page", help="also write a body-only fragment for publishing as a web page")
+    ap.add_argument("--positions", help="CSV of open positions: expiry,strike,type,lots,entry_price")
     a = ap.parse_args()
 
     now = datetime.strptime(a.asof, "%Y-%m-%d %H:%M").replace(tzinfo=IST)
@@ -165,17 +167,162 @@ def main():
                      move=move, range=math.log(th / tl), sigma_day=sigma_day,
                      z=move / sigma_day)
 
+    ideas = suggest(table, summary, rv, today, S)
+    book = None
+    if a.positions:
+        analysed, missing = analyse_positions(load_positions(a.positions), table, S, greeks, a.rate)
+        book = dict(rows=analysed, missing=missing,
+                    scen=scenario_pnl(analysed, S, black76, a.rate) if analysed else [])
+
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     tag = now.strftime("%Y-%m-%d")
     write_tables(out, tag, table, summary)
+    extra = extra_sections(ideas, book)
     html = write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary,
-                           d, c, ret, rv, today, a.page)
+                           d, c, ret, rv, today, a.page, extra)
+    xlsx = write_workbook(out / "download" / f"nifty_dashboard_{tag}.xlsx", now, S, summary,
+                          rv, table, ideas, book)
+    for i in ideas:
+        print(f"[{i['fit']}] {i['name']} {i['expiry']}: net ₹{i['net']:,.0f}/lot")
+    print(f"Workbook: {xlsx.resolve()}")
     print_report(summary, rv, today)
     print(f"\nDashboard: {html.resolve()}")
 
 
 # ------------------------------------------------------------------------ output
+
+def _px(v):
+    return "—" if v is None else f"{v:.2f}"
+
+
+def _rs(v):
+    if v is None:
+        return "—"
+    if math.isinf(v):
+        return "unlimited"
+    return f"−₹{-v:,.0f}" if v < 0 else f"₹{v:,.0f}"
+
+
+def extra_sections(ideas, book):
+    cls = {"Favoured": "good", "Neutral": "warn", "Not favoured": "bad"}
+    cards = []
+    for i in ideas:
+        legs = "".join(
+            f"<tr><td>{'Buy' if l['lots'] > 0 else 'Sell'} {abs(l['lots']):g}</td>"
+            f"<td>{l['expiry']}</td><td>{l['strike']:.0f} {l['type']}</td>"
+            f"<td>{l['price']:.2f}</td><td>{l['oi']:,}</td></tr>" for l in i["legs"])
+        be = ", ".join(f"{b:,.0f}" for b in i.get("breakevens") or []) or "—"
+        net = f"{'Credit' if i['net'] > 0 else 'Debit'} {_rs(abs(i['net']))}"
+        cards.append(f"""<article class="idea">
+<header><span class="pill {cls[i['fit']]}">{i['fit']}</span><h3>{i['name']}</h3>
+<span class="muted">{i['expiry']} · {i['view']}</span></header>
+<ul>{''.join(f'<li>{r}</li>' for r in i['reasons'])}</ul>
+<div class="wrap"><table><tr><th>Leg</th><th>Expiry</th><th>Strike</th><th>LTP</th><th>OI (lots)</th></tr>{legs}</table></div>
+<p class="figs">{net} per lot · max profit {_rs(i.get('max_profit'))} · max loss {_rs(i.get('max_loss'))}
+· breakeven {be}<br>Δ {i['delta']:+.1f} · Γ {i['gamma']:+.3f} · Θ {_rs(i['theta'])}/day · vega {_rs(i['vega'])}/vol-pt (per lot)</p>
+</article>""")
+    html = ('<section><h2>Strategy ideas</h2><p class="notes">Screened from today\'s chain by rules on '
+            'implied vs realised vol, skew and term structure. Prices are last trades, not quotes; '
+            'costs, margin and events are ignored. These are ideas to check, not advice.</p>'
+            f'<div class="ideas">{"".join(cards)}</div></section>')
+    if book is None:
+        html += ('<section><h2>Your positions</h2><p class="notes">No positions supplied. '
+                 'Reply with your open NIFTY option positions (expiry, strike, CE/PE, lots, '
+                 'entry price) and the next dashboard will show their Greeks, P&amp;L and '
+                 'spot-shock scenarios.</p></section>')
+        return html
+    rows = "".join(
+        f"<tr><td>{p['expiry']}</td><td>{p['strike']:.0f} {p['type']}</td><td>{p['lots']:+g}</td>"
+        f"<td>{p['entry']:.2f}</td><td>{_px(p['ltp'])}</td>"
+        f"<td>{_rs(p['pnl'])}</td><td>{p['iv']*100:.1f}%</td><td>{p['delta']:+.1f}</td>"
+        f"<td>{p['gamma']:+.3f}</td><td>{_rs(p['theta'])}</td><td>{_rs(p['vega'])}</td></tr>"
+        for p in book["rows"])
+    tot = {k: sum(p[k] for p in book["rows"]) for k in ("delta", "gamma", "theta", "vega")}
+    pnl = sum(p["pnl"] or 0 for p in book["rows"])
+    rows += (f"<tr class='total'><td>Total</td><td></td><td></td><td></td><td></td><td>{_rs(pnl)}</td>"
+             f"<td></td><td>{tot['delta']:+.1f}</td><td>{tot['gamma']:+.3f}</td>"
+             f"<td>{_rs(tot['theta'])}</td><td>{_rs(tot['vega'])}</td></tr>")
+    scen = "".join(f"<td>{m*100:+.0f}%<br><span class='muted'>{s:,.0f}</span></td>" for m, s, _ in book["scen"])
+    scen_v = "".join(f"<td class='{'up' if v >= 0 else 'down'}'>{_rs(v)}</td>" for *_, v in book["scen"])
+    miss = ""
+    if book["missing"]:
+        miss = ("<p class='notes'>Not priced (expiry not in today's chain): " +
+                ", ".join(f"{m['expiry']} {m['strike']:.0f} {m['type']}" for m in book["missing"]) + "</p>")
+    html += f"""<section><h2>Your positions</h2>
+<div class="wrap"><table><tr><th>Expiry</th><th>Option</th><th>Lots</th><th>Entry</th><th>LTP</th>
+<th>P&amp;L</th><th>IV</th><th>Δ (units)</th><th>Γ</th><th>Θ/day</th><th>Vega/pt</th></tr>{rows}</table></div>
+<h3>Spot shock, IV unchanged</h3><div class="wrap"><table><tr><th>Move</th>{scen}</tr><tr><td>P&amp;L</td>{scen_v}</tr></table></div>{miss}</section>"""
+    return html
+
+
+def _xl(v):
+    return None if v is None else "unlimited" if math.isinf(v) else round(v)
+
+
+def write_workbook(path, now, S, summary, rv, table, ideas, book):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+    ws.append([f"NIFTY 50 options, {now:%Y-%m-%d %H:%M} IST, spot {S:,.2f}"])
+    ws["A1"].font = Font(bold=True, size=13)
+    ws.append([])
+    ws.append(["Expiry", "Days", "ATM strike", "ATM IV %", "Straddle", "Implied move %",
+               "RV20 move %", "Hist median %", "Windows", "P(move>straddle) %", "OI lots"])
+    for s in summary:
+        ws.append([s["expiry"], round(s["days"], 1), s["atm_strike"], round(s["atm_iv"] * 100, 2),
+                   s["straddle"], round(s["implied_move"] * 100, 2), round(s["rv_move"] * 100, 2),
+                   round(s["hist_median_move"] * 100, 2), s["hist_windows"],
+                   round(s["hist_exceed"] * 100), s["oi_lots"]])
+    ws.append([])
+    ws.append(["Realised vol", "Annualised %"])
+    for k, v in rv.items():
+        ws.append([k, round(v * 100, 2)])
+
+    ws = wb.create_sheet("Strategies")
+    ws.append(["Fit", "Strategy", "Expiry", "View", "Net ₹/lot (+credit)", "Max profit", "Max loss",
+               "Breakevens", "Delta", "Gamma", "Theta ₹/day", "Vega ₹/pt", "Legs", "Reasons"])
+    for i in ideas:
+        ws.append([i["fit"], i["name"], i["expiry"], i["view"], round(i["net"]),
+                   _xl(i.get("max_profit")), _xl(i.get("max_loss")),
+                   ", ".join(f"{b:,.0f}" for b in i.get("breakevens") or []),
+                   round(i["delta"], 1), round(i["gamma"], 4), round(i["theta"]), round(i["vega"]),
+                   "; ".join(f"{'Buy' if l['lots'] > 0 else 'Sell'} {l['strike']:.0f}{l['type']} @ {l['price']}"
+                             for l in i["legs"]),
+                   " ".join(i["reasons"])])
+
+    ws = wb.create_sheet("Greeks")
+    ws.append(["Expiry", "Strike", "IV %", "CE LTP", "CE OI lots", "CE delta", "CE gamma",
+               "CE theta", "CE vega", "PE LTP", "PE OI lots", "PE delta", "PE gamma",
+               "PE theta", "PE vega"])
+    for r in table:
+        ws.append([r["expiry"], r["strike"], round(r["iv"] * 100, 2), r["ce_ltp"], r["ce_oi"],
+                   round(r["ce_delta"], 4), round(r["ce_gamma"], 6), round(r["ce_theta"], 2),
+                   round(r["ce_vega"], 2), r["pe_ltp"], r["pe_oi"], round(r["pe_delta"], 4),
+                   round(r["pe_gamma"], 6), round(r["pe_theta"], 2), round(r["pe_vega"], 2)])
+
+    if book and book["rows"]:
+        ws = wb.create_sheet("Positions")
+        ws.append(["Expiry", "Strike", "Type", "Lots", "Entry", "LTP", "P&L ₹", "IV %",
+                   "Delta", "Gamma", "Theta ₹/day", "Vega ₹/pt"])
+        for p in book["rows"]:
+            ws.append([p["expiry"], p["strike"], p["type"], p["lots"], p["entry"], p["ltp"],
+                       None if p["pnl"] is None else round(p["pnl"]), round(p["iv"] * 100, 2),
+                       round(p["delta"], 1), round(p["gamma"], 4), round(p["theta"]), round(p["vega"])])
+        ws.append([])
+        ws.append(["Spot shock", "Spot", "P&L ₹"])
+        for m, s_, v in book["scen"]:
+            ws.append([f"{m*100:+.0f}%", round(s_), round(v)])
+    for sheet in wb.worksheets:
+        for row in sheet.iter_rows(min_row=1, max_row=3):
+            for cell in row:
+                if sheet.title != "Summary" or cell.row == 3:
+                    cell.font = Font(bold=True)
+    wb.save(path)
+    return path
 
 def write_tables(out, tag, table, summary):
     with open(out / f"nifty_greeks_{tag}.csv", "w", newline="") as f:
@@ -212,7 +359,7 @@ def print_report(summary, rv, today):
 
 
 def write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary,
-                    dates, closes, ret, rv, today, page_path=None):
+                    dates, closes, ret, rv, today, page_path=None, extra=""):
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
@@ -360,16 +507,16 @@ def write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary
 /* Layout: one reading column, summary tables first, charts below, each table scrolls inside itself */
 :root {{
   --bg: #f7f8fa; --surface: #ffffff; --fg: #1b2230; --muted: #5d6676;
-  --rule: #dde1e8; --accent: #1f6f8b; --up: #1a7f4b; --down: #b3261e;
+  --rule: #dde1e8; --accent: #1f6f8b; --up: #1a7f4b; --down: #b3261e; --warn: #9a6700;
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 }}
 @media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{
   --bg: #12161d; --surface: #1a2029; --fg: #e4e8ee; --muted: #9aa3b0;
-  --rule: #2c3440; --accent: #5fb3cf; --up: #4cc38a; --down: #ff7b72; color-scheme: dark }} }}
+  --rule: #2c3440; --accent: #5fb3cf; --up: #4cc38a; --down: #ff7b72; --warn: #e3b341; color-scheme: dark }} }}
 :root[data-theme="dark"] {{
   --bg: #12161d; --surface: #1a2029; --fg: #e4e8ee; --muted: #9aa3b0;
-  --rule: #2c3440; --accent: #5fb3cf; --up: #4cc38a; --down: #ff7b72; color-scheme: dark }}
+  --rule: #2c3440; --accent: #5fb3cf; --up: #4cc38a; --down: #ff7b72; --warn: #e3b341; color-scheme: dark }}
 body {{ background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 14px; line-height: 1.5 }}
 main {{ max-width: 1180px; margin: 0 auto; padding-inline: 16px; padding-block: 24px 40px;
         display: grid; gap: 20px }}
@@ -385,7 +532,19 @@ th, td {{ border-bottom: 1px solid var(--rule); padding: 6px 10px; text-align: r
 th {{ color: var(--muted); font-weight: 500; font-size: 12px; text-align: right; border-bottom-color: var(--fg) }}
 td:first-child, th:first-child {{ text-align: left; font-family: var(--mono) }}
 .chart {{ background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; min-width: 0; overflow: hidden }}
-.notes {{ font-size: 12px; color: var(--muted); max-width: 90ch; margin: 0 }}
+.notes {{ font-size: 12px; color: var(--muted); max-width: 90ch; margin: 0 0 8px }}
+.muted {{ color: var(--muted); font-size: 12px }}
+.ideas {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 12px }}
+.idea {{ background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; min-width: 0 }}
+.idea header {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px }}
+.idea h3 {{ margin: 0; font-size: 15px }}
+.idea ul {{ margin: 8px 0; padding-left: 18px }}
+.idea li {{ margin-bottom: 4px }}
+.figs {{ font-family: var(--mono); font-size: 12px; margin: 8px 0 0 }}
+.pill {{ font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 10px; border: 1px solid currentColor }}
+.pill.good, .up {{ color: var(--up) }} .pill.bad, .down {{ color: var(--down) }} .pill.warn {{ color: var(--warn) }}
+tr.total td {{ font-weight: 600; border-top: 1px solid var(--fg) }}
+h3 {{ font-size: 14px; margin: 12px 0 6px }}
 </style>
 <main>
 <header>
@@ -393,6 +552,7 @@ td:first-child, th:first-child {{ text-align: left; font-family: var(--mono) }}
   <h1>{now:%d %b %Y}, {now:%H:%M} IST · spot {S:,.2f}</h1>
 </header>
 {today_html.replace('<p>', '<p class="today">')}
+{extra}
 <section><h2>Expiry summary</h2><div class="wrap">{sm_tbl}</div></section>
 <section><h2>Realised volatility, last {len(closes)} sessions</h2><div class="wrap">{rv_tbl}</div></section>
 <p class="notes" id="nolib" hidden>The charting library did not load, so the charts below are empty. The tables above are complete.</p>
@@ -411,6 +571,13 @@ n is the number of overlapping windows, and long-dated rows rest on very few, mo
             f'</head><body>{page}</body></html>')
     path = out / f"nifty_dashboard_{tag}.html"
     path.write_text(html)
+    # downloadable copy with the chart library inlined, so it opens offline
+    import plotly
+    js = (Path(plotly.__file__).parent / "package_data" / "plotly.min.js").read_text()
+    dl = out / "download"
+    dl.mkdir(exist_ok=True)
+    tag_src = '<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@4.1.1/plotly.min.js"></script>'
+    (dl / f"nifty_dashboard_{tag}.html").write_text(html.replace(tag_src, f"<script>{js}</script>"))
     return path
 
 
