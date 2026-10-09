@@ -113,6 +113,22 @@ def take(sug_id, lots, prices, now, log_dir=LOG_DIR):
     return data["trades"][-1]
 
 
+def add_custom(name, legs, now, rules, log_dir=LOG_DIR, opened=None):
+    """Track a position the user built themselves (not from the suggestion log)."""
+    from nifty_risk import exit_plan
+    idea = dict(legs=[dict(l, price=l["entry"]) for l in legs],
+                net=-sum(l["lots"] * l["entry"] for l in legs) * LOT, eval={"cost": 0.0})
+    plan = exit_plan(idea, rules, now.date())
+    data = read_tracked(log_dir)
+    n = 1 + sum(t["id"].startswith(f"P{now:%Y%m%d}-") for t in data["trades"])
+    trade = dict(id=f"P{now:%Y%m%d}-{n}", name=name, taken=opened or now.strftime("%Y-%m-%d %H:%M"),
+                 source="user position", multiplier=1, legs=legs, entry_net=idea["net"],
+                 exit=plan, status="open", alerts_sent=[], checks=[])
+    data["trades"].append(trade)
+    write_tracked(data, log_dir)
+    return trade
+
+
 def close(sug_id, reason, now, log_dir=LOG_DIR):
     data = read_tracked(log_dir)
     for t in data["trades"]:
@@ -347,6 +363,12 @@ def main():
     t.add_argument("id")
     t.add_argument("--lots", type=int, default=1, help="multiple of the suggested size")
     t.add_argument("--prices", help="your fill price per leg, comma separated, in leg order")
+    ad = sub.add_parser("add", help="track your own position (not from the suggestion log)")
+    ad.add_argument("--name", required=True)
+    ad.add_argument("--leg", action="append", required=True,
+                    help="expiry,strike,CE|PE,lots(+long/-short),entry_price  (repeat per leg)")
+    ad.add_argument("--opened", help="when the position was opened, 'YYYY-MM-DD HH:MM'")
+    ad.add_argument("--rules", default=str(HERE / "rules.json"))
     c = sub.add_parser("close", help="stop tracking a trade you exited")
     c.add_argument("id")
     c.add_argument("--reason", default="closed by user")
@@ -366,6 +388,15 @@ def main():
         prices = [float(p) for p in a.prices.split(",")] if a.prices else None
         tr = take(a.id, a.lots, prices, now, a.log_dir)
         print(f"Tracking {tr['id']} {tr['name']} ×{tr['multiplier']}, entry net ₹{tr['entry_net']:,.0f}")
+    elif a.cmd == "add":
+        from nifty_risk import load_rules
+        legs = []
+        for spec in a.leg:
+            e, k, ty, lots, px = [x.strip() for x in spec.split(",")]
+            legs.append(dict(expiry=e, strike=float(k), type=ty.upper(), lots=float(lots), entry=float(px)))
+        tr = add_custom(a.name, legs, now, load_rules(a.rules), a.log_dir, a.opened)
+        print(f"Tracking {tr['id']} {tr['name']}: entry {'credit' if tr['entry_net'] > 0 else 'debit'} "
+              f"₹{abs(tr['entry_net']):,.0f}, exit by {tr['exit']['exit_date']}")
     elif a.cmd == "close":
         close(a.id, a.reason, now, a.log_dir)
         print(f"Closed {a.id}")

@@ -9,7 +9,8 @@ Charges follow the broker schedule in costs.json (Motilal Oswal F&O options by d
   stamp duty % of premium, buy side
   GST        on brokerage + exchange + SEBI
 orders_per_leg = 1 (hold to expiry) or 2 (enter and exit). The exit order is costed at the
-entry premium, since the exit price is unknown; settlement STT on ITM expiry is not modelled.
+entry premium, since the exit price is unknown. With orders_per_leg = 1, STT on the intrinsic
+value of exercised long options (stt_exercise_pct) is charged in the simulation.
 
 Slippage: with only last-traded prices available, each order is assumed to fill
 max(min_ticks × ₹0.05, pct × premium) worse than LTP, multiplied by a liquidity factor
@@ -99,7 +100,7 @@ def _b76(F, K, T, sigma, is_call):
     return F * norm.cdf(d1) - K * norm.cdf(d2) if is_call else K * norm.cdf(-d2) - F * norm.cdf(-d1)
 
 
-def simulate(legs, S, sigma, n=40000, seed=7):
+def simulate(legs, S, sigma, n=40000, seed=7, exercise_stt_pct=0.0):
     """P&L per path (₹, before costs) at the first leg expiry, spot lognormal at `sigma`."""
     T1 = min(l["T"] for l in legs)
     rng = np.random.default_rng(seed)
@@ -113,6 +114,8 @@ def simulate(legs, S, sigma, n=40000, seed=7):
         rem = l["T"] - T1
         if rem <= 1e-9:
             val = np.maximum(ST - l["strike"], 0) if is_call else np.maximum(l["strike"] - ST, 0)
+            if exercise_stt_pct and l["lots"] > 0:      # STT on intrinsic of exercised long options
+                pnl -= exercise_stt_pct / 100 * val * l["lots"] * LOT
         else:
             carry = l["F"] / F1           # keep the forward spread between the two expiries
             val = _b76(ST * carry, l["strike"], rem, l["iv"], is_call)
@@ -124,7 +127,8 @@ def evaluate(idea, S, sigma, c, alt_sigma=None):
     legs = idea["legs"]
     charges, slip = trade_costs(legs, c)
     cost = charges["total"] + slip
-    pnl = simulate(legs, S, sigma) - cost
+    ex = c.get("stt_exercise_pct", 0.0) if c["orders_per_leg"] < 2 else 0.0
+    pnl = simulate(legs, S, sigma, exercise_stt_pct=ex) - cost
     ev = float(pnl.mean())
     max_loss = idea.get("max_loss")
     if max_loss is None or math.isinf(max_loss):
@@ -139,7 +143,7 @@ def evaluate(idea, S, sigma, c, alt_sigma=None):
                                      if idea.get("max_profit") not in (None, float("inf"))
                                      and idea["max_profit"] > 0 else None)
     if alt_sigma:
-        out["ev_alt"] = float((simulate(legs, S, alt_sigma) - cost).mean())
+        out["ev_alt"] = float((simulate(legs, S, alt_sigma, exercise_stt_pct=ex) - cost).mean())
         out["alt_sigma"] = alt_sigma
     # cost-adjusted payoff limits and breakevens for single-expiry structures
     if idea.get("breakevens") is not None and len({l["expiry"] for l in legs}) == 1:

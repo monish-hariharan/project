@@ -48,3 +48,16 @@ dashboard raises alerts for: book loss beyond a limit, net delta beyond ₹ per 
 or option hedge size), short strikes under pressure (recentre to the implied-move strike), short
 premium at the stop multiple, and legs near expiry (roll to the next month at the same
 moneyness, or exit long premium).
+
+## Decision engine (`nifty_engine.py`)
+
+Combines (1) the India VIX expected range and its Z-score, with a coverage backtest by VIX
+regime; (2) the volatility edge R_IV = ATM IV / forecast realised vol (HAR blend + EWMA);
+(3) positioning — estimated GEX and gamma flip (sign convention: calls +, puts −, an
+assumption), OI change, skew, PCR and max pain as context only; (4) two strategies — iron
+condors (≈16Δ or VIX-range shorts) for Range + Rich IV, and bull-call / bear-put debit spreads
+for a confirmed break; (5) a risk gate — EV after costs > 0, max loss within
+`capital × risk_pct` from `rules.json`, liquid legs. Otherwise the output is NO TRADE.
+Each day's forecast is logged to `logs/predictions.jsonl` and scored against the next session.
+
+Your own positions can be monitored with `nifty_tracker.py add` (see DAILY_RUN.md).

@@ -25,6 +25,7 @@ import numpy as np
 from scipy.stats import norm
 
 from nifty_costs import load_costs, rank
+import nifty_engine as eng
 from nifty_risk import exit_plan, load_rules
 from nifty_strategies import load_positions, suggest
 from nifty_tracker import LOG_DIR, log_suggestions, match_positions, monitor, read_suggestions
@@ -142,6 +143,9 @@ def main():
     ap.add_argument("--positions", help="CSV of open positions (expiry,strike,type,lots,entry_price); "
                                         "only used to detect which logged suggestions you took")
     ap.add_argument("--log-dir", default=str(LOG_DIR), help="suggestion log and tracked trades")
+    ap.add_argument("--vix", help="India VIX daily OHLC CSV (same sessions as --daily)")
+    ap.add_argument("--vix-now", type=float, help="India VIX at --asof (default: last close)")
+    ap.add_argument("--prev-chain", help="earlier chain snapshot for OI change")
     a = ap.parse_args()
 
     now = datetime.strptime(a.asof, "%Y-%m-%d %H:%M").replace(tzinfo=IST)
@@ -199,12 +203,50 @@ def main():
                      move=move, range=math.log(th / tl), sigma_day=sigma_day,
                      z=move / sigma_day)
 
-    ideas = suggest(table, summary, rv, today, S)
     costs = load_costs(a.costs)
-    best = rank(ideas, S, rv["cc_20"], costs, alt_sigma=rv["cc_5"])
     rules = load_rules(a.rules)
+    nifty = eng.load_ohlc(a.daily)
+    vixd = eng.load_ohlc(a.vix) if a.vix else None
+    vix_prev = float(vixd["close"][-1]) if vixd else summary[0]["atm_iv"] * 100
+    vix_now = a.vix_now or vix_prev
+    vf = eng.vol_forecast(np.append(nifty["close"], S))
+    E_prev = eng.expected_move(prev_close, vix_prev)          # yesterday's forecast for today
+    Z = (S - prev_close) / E_prev
+    E_next = eng.expected_move(S, vix_now)                    # forecast for the next session
+    rb = eng.range_backtest(nifty, vixd) if vixd else None
+    ideas, target = eng.candidates(table, summary, S, vix_now, rules)
+    rank(ideas, S, vf["forecast"], costs, alt_sigma=rv["cc_5"])
+    edge = eng.vol_edge(target["atm_iv"], vf["forecast"], rules)
+    prev_day = dict(high=float(nifty["high"][-1]), low=float(nifty["low"][-1]))
+    reg = eng.regime(S, prev_day, vf, Z, rules)
+    gex = eng.gex_profile(table, S)
+    pm_front = eng.pcr_maxpain(table, summary[0]["expiry"])
+    pm_target = eng.pcr_maxpain(table, target["expiry"])
+    prev_table = None
+    if a.prev_chain:
+        pch = load_csv(a.prev_chain, S)
+        ppts = []
+        for e, dd in pch.items():
+            ppts += chain_points(e, dd, now, a.rate, 0.10)
+        prev_table = make_table(pch, ppts, S, a.rate)
+    oic = eng.oi_change(table, prev_table, target["expiry"])
+    skew = (_skew(table, target))
+    decision = eng.decide(ideas, reg, edge, gex, S, rules,
+                          events_today=now.date().isoformat() in rules.get("event_dates", []))
     for i in ideas:
+        i["best"] = i is decision["trade"]
         i["exit"] = exit_plan(i, rules, now.date())
+        i["reasons"] = _engine_reasons(i, reg, edge, rb, gex, S)
+        i["fit"] = "Pass" if i["gate"]["pass"] else "Fail"
+    ideas.sort(key=lambda i: (not i["best"], not i["gate"]["pass"], -i["eval"]["ev_on_risk"]))
+    best = decision["trade"]
+    plog = Path(a.log_dir) / "predictions.jsonl"
+    eng.log_prediction(plog, now.date().isoformat(), S, vix_now, E_next, reg, edge, gex, decision)
+    score = eng.score_predictions(plog, nifty)
+    engine = dict(vix_prev=vix_prev, vix_now=vix_now, E_prev=E_prev, Z=Z, E_next=E_next, vf=vf, rb=rb,
+                  edge=edge, reg=reg, gex=gex, pm_front=pm_front, pm_target=pm_target, oic=oic,
+                  skew=skew, decision=decision, target=target, score=score, prev_close=prev_close,
+                  rules=rules)
     log_suggestions(ideas, now, S, a.log_dir)
     started = match_positions(load_positions(a.positions), now, a.log_dir) if a.positions else []
     tracked = monitor(table, summary, S, now, rules, a.log_dir, only_new=False)
@@ -214,9 +256,9 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     tag = now.strftime("%Y-%m-%d")
     write_tables(out, tag, table, summary)
-    extra = extra_sections(ideas, tracked, log, best, costs)
+    extra = engine_section(engine, S, summary) + extra_sections(ideas, tracked, log, best, costs)
     html = write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary,
-                           d, c, ret, rv, today, a.page, extra)
+                           d, c, ret, rv, today, a.page, extra, engine_figs(engine, S))
     xlsx = write_workbook(out / "download" / f"nifty_dashboard_{tag}.xlsx", now, S, summary,
                           rv, table, ideas, tracked, log, costs)
     for i in ideas:
@@ -224,6 +266,12 @@ def main():
         print(f"{'BEST ' if i['best'] else '     '}[{i['fit']}] {i['name']} {i['expiry']}: "
               f"net ₹{i['net']:,.0f}, costs ₹{e['cost']:,.0f}, EV ₹{e['ev']:,.0f} "
               f"(EV/risk {e['ev_on_risk']*100:+.1f}%, POP {e['pop']*100:.0f}%)")
+    d_ = engine["decision"]
+    print(f"ENGINE: regime {reg['label']}{' ' + reg['direction'] if reg['direction'] else ''} (Z {Z:+.2f}), "
+          f"vol edge {edge['label']} (R_IV {edge['ratio']:.2f}), GEX {gex['regime']} flip "
+          f"{gex['flip'] and round(gex['flip'])}, decision: {d_['label']}")
+    for m in d_["matrix"]:
+        print(f"  - {m}")
     for t in started:
         print(f"Now tracking {t['id']} {t['name']} ×{t['multiplier']} (found in your positions)")
     for t, snap, alerts, _ in tracked:
@@ -234,6 +282,155 @@ def main():
     print_report(summary, rv, today)
     print(f"\nDashboard: {html.resolve()}")
 
+
+
+# ------------------------------------------------------------------ engine
+
+def _skew(table, target):
+    rows = [r for r in table if r["expiry"] == target["expiry"]]
+    F = target["forward"]
+    ks = np.array([math.log(r["strike"] / F) for r in rows])
+    ivs = [r["iv"] for r in rows]
+    at = lambda m: float(np.interp(math.log(m), ks, ivs))
+    return dict(put=at(0.96) - at(1.0), call=at(1.04) - at(1.0))
+
+
+def _engine_reasons(i, reg, edge, rb, gex, S):
+    r = [f"Regime {reg['label']} ({'; '.join(reg['reasons'])}).",
+         f"{i['expiry']} ATM IV {edge['atm_iv']*100:.1f}% vs forecast realised {edge['forecast']*100:.1f}% "
+         f"→ R_IV {edge['ratio']:.2f} ({edge['label']})."]
+    if i["family"] == "condor" and rb:
+        a = rb["by"][0]
+        r.append(f"VIX one-day range held the close {a['close_inside']*100:.0f}% of {a['n']} sessions "
+                 f"(≈68% expected); realised/implied move ratio {a['ratio']:.2f}.")
+    if gex["flip"]:
+        r.append(f"Estimated gamma flip {gex['flip']:,.0f}; spot is {'above' if S > gex['flip'] else 'below'} "
+                 f"it ({gex['regime']} total GEX, sign convention assumed).")
+    g = i["gate"]
+    r.append("Risk gate: " + ("PASS" if g["pass"] else "FAIL — " + "; ".join(g["notes"])) +
+             f" (budget ₹{g['budget']:,.0f} → {g['lots']} lot(s)).")
+    return r
+
+
+def _tile(title, value, cls, detail):
+    return (f"<div class='tile'><span class='eyebrow'>{title}</span><b class='{cls}'>{value}</b>"
+            f"<span class='muted'>{detail}</span></div>")
+
+
+def engine_section(en, S, summary):
+    d, reg, edge, gex, rb = en["decision"], en["reg"], en["edge"], en["gex"], en["rb"]
+    trade = d["trade"]
+    gate_val = "Pass" if trade else "Fail"
+    tiles = "".join([
+        _tile("Forecast regime", reg["label"] + (f" ({reg['direction']})" if reg["direction"] else ""),
+              "warn" if reg["label"] == "Mixed" else "good",
+              f"Z {en['Z']:+.2f} · 5d/20d vol {reg['expansion']:.2f}×"),
+        _tile("Volatility edge", edge["label"], "good" if edge["label"] != "Fair" else "warn",
+              f"R_IV {edge['ratio']:.2f} = {edge['atm_iv']*100:.1f}% / {edge['forecast']*100:.1f}%"),
+        _tile("Positioning", f"{gex['regime'].title()} GEX", "warn",
+              (f"flip {gex['flip']:,.0f} · " if gex['flip'] else "") +
+              f"PCR {en['pm_target']['pcr']:.2f} · max pain {en['pm_target']['max_pain']:,.0f}"),
+        _tile("Risk gate", gate_val, "good" if trade else "bad",
+              f"budget ₹{d['budget']:,.0f} ({en['rules']['risk_pct']}% of ₹{en['rules']['capital']:,.0f})"),
+    ])
+    if trade:
+        g, e, x = trade["gate"], trade["eval"], trade["exit"]
+        legs = "; ".join(f"{'buy' if l['lots'] > 0 else 'sell'} {l['strike']:.0f} {l['type']} @ {l['price']:.2f}"
+                         for l in trade["legs"])
+        final = (f"<p class='decision good'><b>{trade['name']} — {trade['expiry']}</b> ({trade.get('id', '')}): "
+                 f"{legs}. Size {g['lots']} lot(s). EV after costs {_rs(e['ev'])}/lot, max loss "
+                 f"{_rs(-g['max_loss'])}/lot. Invalidation: {x['stop_loss']}. Exit by {x['exit_date']}.</p>")
+    else:
+        final = "<p class='decision bad'><b>NO TRADE.</b> No candidate passes every gate today.</p>"
+    matrix = "".join(f"<li>{m}</li>" for m in d["matrix"])
+
+    # expected range
+    E, Z = en["E_next"], en["Z"]
+    rng = (f"<p>India VIX {en['vix_now']:.2f} → one-day 1σ move ±{E:,.0f} pts: next-session range "
+           f"<b>{S - E:,.0f} – {S + E:,.0f}</b>. Today NIFTY moved {S - en['prev_close']:+,.0f} pts vs the "
+           f"±{en['E_prev']:,.0f} implied by yesterday's VIX ({en['vix_prev']:.2f}): <b>Z = {Z:+.2f}</b>.</p>")
+    cov = ""
+    if rb:
+        cov = ("<div class='wrap'><table class='rank'><tr><th>Regime</th><th>Sessions</th><th>Close inside ±1σ</th>"
+               "<th>Closed above</th><th>Closed below</th><th>High touched +1σ</th><th>Low touched −1σ</th>"
+               "<th>|Z| &gt; 2</th><th>Realised / implied</th></tr>" + "".join(
+                   f"<tr><td>{b['label']}</td><td>{b['n']}</td><td>{b['close_inside']*100:.0f}%</td>"
+                   f"<td>{b['up_close']*100:.0f}%</td><td>{b['dn_close']*100:.0f}%</td>"
+                   f"<td>{b['up_touch']*100:.0f}%</td><td>{b['dn_touch']*100:.0f}%</td>"
+                   f"<td>{b['tail']*100:.0f}%</td><td>{b['ratio']:.2f}</td></tr>" for b in rb["by"]) +
+               "</table></div><p class='notes'>A calibrated 1σ range holds the close ≈68% of the time; a "
+               "realised/implied ratio below 1 means VIX overstated the moves (a volatility risk premium). "
+               f"Only {rb['by'][0]['n']} sessions of history are available through the Dhan connector, so treat "
+               "these as indicative; the prediction log below builds the out-of-sample record.</p>")
+    vf = en["vf"]
+    volp = (f"<p>Forecast realised vol {vf['forecast']*100:.1f}% (HAR blend {vf['har']*100:.1f}% of 5/20/60-day "
+            f"{vf['rv'].get(5, 0)*100:.1f}/{vf['rv'].get(20, 0)*100:.1f}/{vf['rv'].get(60, 0)*100:.1f}%, "
+            f"EWMA {vf['ewma']*100:.1f}%). {en['target']['expiry']} ATM IV {edge['atm_iv']*100:.1f}% → "
+            f"R_IV {edge['ratio']:.2f}: rich ≥ {en['rules']['iv_rich_ratio']}, cheap ≤ {en['rules']['iv_cheap_ratio']}.</p>")
+    pos = (f"<p>Estimated total GEX ₹{gex['total']:,.0f} cr per 1% move ({gex['regime']}); gamma flip "
+           f"{'≈ ' + format(gex['flip'], ',.0f') if gex['flip'] else 'not within ±5%'}. "
+           f"Put skew (4% OTM − ATM) {en['skew']['put']*100:+.1f} pts, call skew {en['skew']['call']*100:+.1f} pts. "
+           f"PCR (OI) {summary[0]['expiry']} {en['pm_front']['pcr']:.2f}, {en['target']['expiry']} "
+           f"{en['pm_target']['pcr']:.2f}; max pain {en['pm_front']['max_pain']:,.0f} / "
+           f"{en['pm_target']['max_pain']:,.0f}.</p><p class='notes'>GEX assumes dealers are long calls and short "
+           "puts; open interest does not reveal who holds which side, so the sign is a modelling convention. "
+           "PCR and max pain are context only and are not used in the decision.</p>")
+    if en["oic"]:
+        o = en["oic"]
+        pos += ("<p>OI change since the earlier snapshot (" + en["target"]["expiry"] + "): calls added at " +
+                ", ".join(f"{r['strike']:.0f} ({r['ce']:+,})" for r in o["top_ce"][:3]) + "; puts added at " +
+                ", ".join(f"{r['strike']:.0f} ({r['pe']:+,})" for r in o["top_pe"][:3]) + " (lots).</p>")
+    sc = en["score"]
+    score = ""
+    if sc["rows"]:
+        score = ("<div class='wrap'><table class='rank'><tr><th>Date</th><th>Spot</th><th>VIX</th><th>Range</th>"
+                 "<th>Regime</th><th>Vol edge</th><th>Decision</th><th>Next close</th><th>Inside?</th></tr>" + "".join(
+                     f"<tr><td>{p['date']}</td><td>{p['spot']:,.0f}</td><td>{p['vix']:.2f}</td>"
+                     f"<td>{p['range_lo']:,.0f}–{p['range_hi']:,.0f}</td><td>{p['regime']}</td><td>{p['vol_edge']}</td>"
+                     f"<td>{p['decision']}</td><td>{format(p['outcome']['close'], ',.0f') if p['outcome'] else 'pending'}</td>"
+                     f"<td>{('yes' if p['outcome']['close_inside'] else 'no') if p['outcome'] else '—'}</td></tr>"
+                     for p in reversed(sc["rows"])) + "</table></div>")
+        if sc["n"]:
+            score += (f"<p class='notes'>Scored predictions: {sc['n']} · close inside range "
+                      f"{sc['close_inside']*100:.0f}% · range touched {sc['touched']*100:.0f}%.</p>")
+    return f"""<section><h2>Decision engine</h2><div class="tiles">{tiles}</div>{final}
+<ul class="matrix">{matrix}</ul></section>
+<section><h2>Expected range (India VIX)</h2>{rng}{cov}</section>
+<section><h2>Volatility edge</h2>{volp}</section>
+<section><h2>Positioning</h2>{pos}</section>
+<section><h2>Prediction log</h2>{score}</section>"""
+
+
+def engine_figs(en, S):
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    gex = en["gex"]
+    f = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                      subplot_titles=("Estimated GEX by strike (₹ cr per 1%)", "Total GEX vs spot (gamma flip)"))
+    ks = list(gex["by_strike"].keys())
+    vs = list(gex["by_strike"].values())
+    f.add_trace(go.Bar(x=ks, y=vs, marker_color=["#2ca02c" if v >= 0 else "#d62728" for v in vs],
+                       name="GEX", showlegend=False), row=1, col=1)
+    f.add_trace(go.Scatter(x=gex["grid"], y=gex["profile"], mode="lines", line=dict(color="#4c78a8"),
+                           name="total GEX", showlegend=False), row=1, col=2)
+    for col in (1, 2):
+        f.add_vline(x=S, line_dash="dot", line_color="#8a919c", row=1, col=col)
+    if gex["flip"]:
+        f.add_vline(x=gex["flip"], line_dash="dash", line_color="#e45756", row=1, col=2,
+                    annotation_text=f"flip {gex['flip']:,.0f}", annotation_position="bottom right")
+    f.update_layout(title="Positioning (sign convention: calls +, puts −; an assumption)", height=420)
+    figs = [f]
+    if en["rb"]:
+        rows = en["rb"]["rows"]
+        g = go.Figure()
+        g.add_trace(go.Bar(x=[r["date"] for r in rows], y=[r["z"] for r in rows], name="Z (move / VIX 1σ)",
+                           marker_color=["#d62728" if abs(r["z"]) > 1 else "#4c78a8" for r in rows]))
+        for y in (1, -1):
+            g.add_hline(y=y, line_dash="dash", line_color="#8a919c")
+        g.update_layout(title="Daily move in units of the VIX-implied 1σ (red = outside the range)", height=380,
+                        yaxis_title="Z")
+        figs.append(g)
+    return figs
 
 # ------------------------------------------------------------------------ output
 
@@ -261,7 +458,8 @@ def extra_sections(ideas, tracked, log, best, c):
         ch = e["charges"]
         be = ", ".join(f"{b:,.0f}" for b in e.get("breakevens_after") or i.get("breakevens") or []) or "—"
         net = f"{'Credit' if i['net'] > 0 else 'Debit'} {_rs(abs(i['net']))}"
-        badge = '<span class="pill best">Best trade</span>' if i["best"] else ""
+        badge = ('<span class="pill best">Engine pick</span>' if i["best"] else
+                 f'<span class="pill {"good" if i["gate"]["pass"] else "bad"}">Gate {"pass" if i["gate"]["pass"] else "fail"}</span>')
         mp = e.get("max_profit_after", i.get("max_profit"))
         ml = e.get("max_loss_after", i.get("max_loss"))
         costs_html = (
@@ -279,7 +477,7 @@ def extra_sections(ideas, tracked, log, best, c):
                    + f"<br>Chance of profit {e['pop']*100:.0f}% · EV / risk {e['ev_on_risk']*100:+.1f}%"
                    + f" · 5% worst case {_rs(e['p5'])}</p>")
         cards.append(f"""<article class="idea">
-<header>{badge}<span class="pill {cls[i['fit']]}">{i['fit']}</span><h3>{i['name']}</h3>
+<header>{badge}<h3>{i['name']}</h3>
 <span class="muted id">{i.get('id', '')}</span>
 <span class="muted">{i['expiry']} · {i['view']}</span></header>
 <ul>{''.join(f'<li>{r}</li>' for r in i['reasons'])}</ul>
@@ -300,13 +498,13 @@ After costs: max profit {_rs(mp)} · max loss {_rs(ml)} · breakeven {be}<br>
         f"<td>{_rs(i['eval']['risk'])}</td><td>{i['eval']['ev_on_risk']*100:+.1f}%</td></tr>"
         for n, i in enumerate(ideas, 1))
     if best:
-        verdict = (f"<p class='today'><b>Best trade today: {best['name']} ({best['expiry']}).</b> "
+        verdict = (f"<p class='today'><b>Engine pick: {best['name']} ({best['expiry']}).</b> "
                    f"Expected {_rs(best['eval']['ev'])} per lot after {_rs(best['eval']['cost'])} of charges "
                    f"and slippage, {best['eval']['ev_on_risk']*100:+.1f}% of the capital at risk, "
                    f"{best['eval']['pop']*100:.0f}% chance of profit.</p>")
     else:
-        verdict = ("<p class='today'><b>No idea has a positive expected value after costs today.</b> "
-                   "Staying flat is the cost-adjusted best choice.</p>")
+        verdict = ("<p class='today'><b>No candidate passes every gate today (NO TRADE).</b> "
+                   "The cards show which gate each one fails.</p>")
     sigma = ideas[0]["eval"]["sigma"] if ideas else 0
     html = ('<section><h2>Strategy ideas</h2>' + verdict +
             '<div class="wrap"><table class="rank"><tr><th>Rank</th><th>Strategy</th><th>Expiry</th><th>Net ₹/lot</th>'
@@ -499,7 +697,7 @@ def print_report(summary, rv, today):
 
 
 def write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary,
-                    dates, closes, ret, rv, today, page_path=None, extra=""):
+                    dates, closes, ret, rv, today, page_path=None, extra="", extra_figs=None):
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
@@ -543,6 +741,7 @@ def write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary
     f.update_layout(title="Volatility smile and term structure", height=480,
                     legend=dict(orientation="h", y=-0.2))
     figs.append(f)
+    figs.extend(extra_figs or [])
 
     # 2. greeks by strike (OTM side: put below forward, call above)
     f = make_subplots(rows=2, cols=2, subplot_titles=(
@@ -685,6 +884,12 @@ td:first-child, th:first-child {{ text-align: left; font-family: var(--mono) }}
 .pill.best {{ background: var(--accent); color: var(--bg); border-color: var(--accent) }}
 tr.bestrow td {{ font-weight: 600; color: var(--accent) }}
 .exit {{ margin-top: 8px; font-size: 13px }}
+.tiles {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 10px }}
+.tile {{ background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px; display: grid; gap: 2px; min-width: 0 }}
+.tile b {{ font-size: 20px }} .tile b.good {{ color: var(--up) }} .tile b.bad {{ color: var(--down) }} .tile b.warn {{ color: var(--warn) }}
+.decision {{ border: 1px solid var(--rule); border-left: 4px solid var(--rule); border-radius: 6px; padding: 10px 12px; background: var(--surface); max-width: 110ch }}
+.decision.good {{ border-left-color: var(--up) }} .decision.bad {{ border-left-color: var(--down) }}
+.matrix {{ margin: 6px 0 0; padding-left: 18px; color: var(--muted) }}
 .exit ul {{ margin: 4px 0; padding-left: 0; list-style: none }}
 .tag {{ display: inline-block; min-width: 84px; font-family: var(--mono); font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em }}
 .alerts {{ list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 6px; max-width: 110ch }}

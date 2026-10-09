@@ -10,5 +10,6 @@
   "slippage_min_ticks": 1,
   "slippage_pct": 0.5,
   "liquid_oi_lots": 10000,
-  "thin_oi_lots": 1000
+  "thin_oi_lots": 1000,
+  "stt_exercise_pct": 0.15
 }
