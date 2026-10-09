@@ -31,3 +31,11 @@ python nifty_dashboard.py --chain data/nifty_chain_2026-10-09.csv \
   --daily data/nifty_daily_2026-10-09.csv --spot 22496.50 --asof "2026-10-09 10:44" \
   --today-ohlc 22350.05,22515.95,22294.75
 ```
+
+## Costs, slippage and the best trade
+
+`costs.json` holds the broker schedule (Motilal Oswal F&O options: ₹40/lot/order, STT 0.15% sell,
+exchange 0.035%, SEBI 0.0001%, stamp 0.003% buy, GST 18%, 2 orders per leg) and slippage settings.
+Each strategy idea shows its full charge breakdown, P&L limits and breakevens after costs, and an
+expected P&L simulated at 20-day (and 5-day) realised vol. Ideas are ranked by EV / capital at risk;
+the top one is marked "Best trade" only if its EV after costs is positive.

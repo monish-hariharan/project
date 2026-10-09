@@ -3,7 +3,8 @@ Rule-based strategy ideas and position analytics for the NIFTY dashboard.
 
 Every idea is built from the day's chain (last traded prices) and states the
 numbers that drive it, so the reader can check the reasoning. These are
-screening ideas, not advice: they ignore costs, slippage, margin and events.
+screening ideas, not advice. Costs and slippage are applied in nifty_costs.py;
+margin and events are not modelled.
 """
 from __future__ import annotations
 
@@ -35,7 +36,8 @@ def _leg(row, kind, lots):
     return dict(expiry=row["expiry"], strike=row["strike"], type=kind, lots=lots,
                 price=row[f"{side}_ltp"], oi=row[f"{side}_oi"],
                 delta=row[f"{side}_delta"], gamma=row[f"{side}_gamma"],
-                theta=row[f"{side}_theta"], vega=row[f"{side}_vega"])
+                theta=row[f"{side}_theta"], vega=row[f"{side}_vega"],
+                iv=row["iv"], F=row["forward"], T=row["days"] / 365)
 
 
 def _payoff(legs, S_T):

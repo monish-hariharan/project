@@ -1,0 +1,14 @@
+{
+  "broker": "Motilal Oswal",
+  "brokerage_per_lot_per_order": 40.0,
+  "stt_sell_pct": 0.15,
+  "exchange_pct": 0.035,
+  "sebi_pct": 0.0001,
+  "stamp_buy_pct": 0.003,
+  "gst_pct": 18.0,
+  "orders_per_leg": 2,
+  "slippage_min_ticks": 1,
+  "slippage_pct": 0.5,
+  "liquid_oi_lots": 10000,
+  "thin_oi_lots": 1000
+}

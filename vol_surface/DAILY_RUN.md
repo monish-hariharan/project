@@ -20,7 +20,7 @@ environment directly). Work on branch `claude/laughing-einstein-rnosdm`, in `vol
 6. **Positions** — `portfolio_agent_tool` `positions` (read-only). Convert open NIFTY option
    positions to `data/positions.csv` (`expiry,strike,type,lots,entry_price`, lots = qty/65,
    short negative, entry = costPrice). Keep any manual rows the user added there.
-7. **Build**
+7. **Build** (charges and slippage come from `costs.json`; edit it if your broker plan changes)
    ```
    python nifty_dashboard.py --chain data/nifty_chain_<date>.csv --daily data/nifty_daily_<date>.csv \
      --spot <spot> --asof "<date> <HH:MM>" --today-ohlc <open>,<high>,<low> \

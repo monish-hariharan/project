@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import norm
 
+from nifty_costs import load_costs, rank
 from nifty_strategies import analyse_positions, load_positions, scenario_pnl, suggest
 from nifty_vol_surface import (IST, black76, build_grid, chain_points, load_csv,
                                time_to_expiry)
@@ -91,6 +92,8 @@ def main():
     ap.add_argument("--rate", type=float, default=0.055)
     ap.add_argument("--out", default="output")
     ap.add_argument("--page", help="also write a body-only fragment for publishing as a web page")
+    ap.add_argument("--costs", default=str(Path(__file__).with_name("costs.json")),
+                    help="broker charges and slippage settings (JSON)")
     ap.add_argument("--positions", help="CSV of open positions: expiry,strike,type,lots,entry_price")
     a = ap.parse_args()
 
@@ -168,6 +171,8 @@ def main():
                      z=move / sigma_day)
 
     ideas = suggest(table, summary, rv, today, S)
+    costs = load_costs(a.costs)
+    best = rank(ideas, S, rv["cc_20"], costs, alt_sigma=rv["cc_5"])
     book = None
     if a.positions:
         analysed, missing = analyse_positions(load_positions(a.positions), table, S, greeks, a.rate)
@@ -178,13 +183,16 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     tag = now.strftime("%Y-%m-%d")
     write_tables(out, tag, table, summary)
-    extra = extra_sections(ideas, book)
+    extra = extra_sections(ideas, book, best, costs)
     html = write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary,
                            d, c, ret, rv, today, a.page, extra)
     xlsx = write_workbook(out / "download" / f"nifty_dashboard_{tag}.xlsx", now, S, summary,
-                          rv, table, ideas, book)
+                          rv, table, ideas, book, costs)
     for i in ideas:
-        print(f"[{i['fit']}] {i['name']} {i['expiry']}: net ₹{i['net']:,.0f}/lot")
+        e = i["eval"]
+        print(f"{'BEST ' if i['best'] else '     '}[{i['fit']}] {i['name']} {i['expiry']}: "
+              f"net ₹{i['net']:,.0f}, costs ₹{e['cost']:,.0f}, EV ₹{e['ev']:,.0f} "
+              f"(EV/risk {e['ev_on_risk']*100:+.1f}%, POP {e['pop']*100:.0f}%)")
     print(f"Workbook: {xlsx.resolve()}")
     print_report(summary, rv, today)
     print(f"\nDashboard: {html.resolve()}")
@@ -204,7 +212,7 @@ def _rs(v):
     return f"−₹{-v:,.0f}" if v < 0 else f"₹{v:,.0f}"
 
 
-def extra_sections(ideas, book):
+def extra_sections(ideas, book, best, c):
     cls = {"Favoured": "good", "Neutral": "warn", "Not favoured": "bad"}
     cards = []
     for i in ideas:
@@ -212,19 +220,64 @@ def extra_sections(ideas, book):
             f"<tr><td>{'Buy' if l['lots'] > 0 else 'Sell'} {abs(l['lots']):g}</td>"
             f"<td>{l['expiry']}</td><td>{l['strike']:.0f} {l['type']}</td>"
             f"<td>{l['price']:.2f}</td><td>{l['oi']:,}</td></tr>" for l in i["legs"])
-        be = ", ".join(f"{b:,.0f}" for b in i.get("breakevens") or []) or "—"
+        e = i["eval"]
+        ch = e["charges"]
+        be = ", ".join(f"{b:,.0f}" for b in e.get("breakevens_after") or i.get("breakevens") or []) or "—"
         net = f"{'Credit' if i['net'] > 0 else 'Debit'} {_rs(abs(i['net']))}"
+        badge = '<span class="pill best">Best trade</span>' if i["best"] else ""
+        mp = e.get("max_profit_after", i.get("max_profit"))
+        ml = e.get("max_loss_after", i.get("max_loss"))
+        costs_html = (
+            f"<table class='costs'><tr><th>Charges per lot ({'round trip' if c['orders_per_leg'] >= 2 else 'held to expiry'})</th><th></th></tr>"
+            f"<tr><td>Brokerage</td><td>{_rs(ch['brokerage'])}</td></tr>"
+            f"<tr><td>STT (sell side)</td><td>{_rs(ch['stt'])}</td></tr>"
+            f"<tr><td>Exchange + SEBI</td><td>{_rs(ch['exchange'] + ch['sebi'])}</td></tr>"
+            f"<tr><td>Stamp duty (buy side)</td><td>{_rs(ch['stamp'])}</td></tr>"
+            f"<tr><td>GST</td><td>{_rs(ch['gst'])}</td></tr>"
+            f"<tr><td>Slippage (est.)</td><td>{_rs(e['slippage'])}</td></tr>"
+            f"<tr class='total'><td>Total cost</td><td>{_rs(e['cost'])}</td></tr></table>")
+        ev_html = (f"<p class='figs ev {'up' if e['ev'] > 0 else 'down'}'>Expected P&amp;L after costs "
+                   f"{_rs(e['ev'])} at {e['sigma']*100:.1f}% vol (20d realised)"
+                   + (f" · {_rs(e['ev_alt'])} at {e['alt_sigma']*100:.1f}% (5d)" if 'ev_alt' in e else "")
+                   + f"<br>Chance of profit {e['pop']*100:.0f}% · EV / risk {e['ev_on_risk']*100:+.1f}%"
+                   + f" · 5% worst case {_rs(e['p5'])}</p>")
         cards.append(f"""<article class="idea">
-<header><span class="pill {cls[i['fit']]}">{i['fit']}</span><h3>{i['name']}</h3>
+<header>{badge}<span class="pill {cls[i['fit']]}">{i['fit']}</span><h3>{i['name']}</h3>
 <span class="muted">{i['expiry']} · {i['view']}</span></header>
 <ul>{''.join(f'<li>{r}</li>' for r in i['reasons'])}</ul>
 <div class="wrap"><table><tr><th>Leg</th><th>Expiry</th><th>Strike</th><th>LTP</th><th>OI (lots)</th></tr>{legs}</table></div>
-<p class="figs">{net} per lot · max profit {_rs(i.get('max_profit'))} · max loss {_rs(i.get('max_loss'))}
-· breakeven {be}<br>Δ {i['delta']:+.1f} · Γ {i['gamma']:+.3f} · Θ {_rs(i['theta'])}/day · vega {_rs(i['vega'])}/vol-pt (per lot)</p>
+<p class="figs">{net} per lot before costs · {_rs(e['net_after'])} after costs<br>
+After costs: max profit {_rs(mp)} · max loss {_rs(ml)} · breakeven {be}<br>
+Δ {i['delta']:+.1f} · Γ {i['gamma']:+.3f} · Θ {_rs(i['theta'])}/day · vega {_rs(i['vega'])}/vol-pt (per lot)</p>
+{ev_html}<div class="wrap">{costs_html}</div>
 </article>""")
-    html = ('<section><h2>Strategy ideas</h2><p class="notes">Screened from today\'s chain by rules on '
-            'implied vs realised vol, skew and term structure. Prices are last trades, not quotes; '
-            'costs, margin and events are ignored. These are ideas to check, not advice.</p>'
+    rank_rows = "".join(
+        f"<tr{' class=\'bestrow\'' if i['best'] else ''}><td>{n}</td><td>{i['name']}</td><td>{i['expiry']}</td>"
+        f"<td>{_rs(i['net'])}</td><td>{_rs(i['eval']['cost'])}</td><td>{_rs(i['eval']['ev'])}</td>"
+        f"<td>{_rs(i['eval'].get('ev_alt'))}</td><td>{i['eval']['pop']*100:.0f}%</td>"
+        f"<td>{_rs(i['eval']['risk'])}</td><td>{i['eval']['ev_on_risk']*100:+.1f}%</td></tr>"
+        for n, i in enumerate(ideas, 1))
+    if best:
+        verdict = (f"<p class='today'><b>Best trade today: {best['name']} ({best['expiry']}).</b> "
+                   f"Expected {_rs(best['eval']['ev'])} per lot after {_rs(best['eval']['cost'])} of charges "
+                   f"and slippage, {best['eval']['ev_on_risk']*100:+.1f}% of the capital at risk, "
+                   f"{best['eval']['pop']*100:.0f}% chance of profit.</p>")
+    else:
+        verdict = ("<p class='today'><b>No idea has a positive expected value after costs today.</b> "
+                   "Staying flat is the cost-adjusted best choice.</p>")
+    sigma = ideas[0]["eval"]["sigma"] if ideas else 0
+    html = ('<section><h2>Strategy ideas</h2>' + verdict +
+            '<div class="wrap"><table class="rank"><tr><th>Rank</th><th>Strategy</th><th>Expiry</th><th>Net ₹/lot</th>'
+            '<th>Costs</th><th>EV (20d vol)</th><th>EV (5d vol)</th><th>P(profit)</th><th>Risk</th>'
+            f'<th>EV / risk</th></tr>{rank_rows}</table></div>'
+            f'<p class="notes">Ranked by expected P&amp;L after {c["broker"]} charges (₹{c["brokerage_per_lot_per_order"]:.0f}/lot/order, '
+            f'STT {c["stt_sell_pct"]}% sell, exchange {c["exchange_pct"]}%, SEBI {c["sebi_pct"]}%, stamp {c["stamp_buy_pct"]}% buy, '
+            f'GST {c["gst_pct"]:.0f}%, {c["orders_per_leg"]} order(s) per leg) and slippage '
+            f'(max of {c["slippage_min_ticks"]} tick or {c["slippage_pct"]}% of premium per order, ×2 below '
+            f'{c["liquid_oi_lots"]:,} lots OI, ×4 below {c["thin_oi_lots"]:,}), divided by the capital at risk. '
+            f'EV assumes NIFTY moves at its 20-day realised vol ({sigma*100:.1f}%) to the first expiry; '
+            'the 5-day column shows the same with recent, higher vol. Prices are last trades, not quotes; '
+            'margin and events are not modelled. These are ideas to check, not advice.</p>'
             f'<div class="ideas">{"".join(cards)}</div></section>')
     if book is None:
         html += ('<section><h2>Your positions</h2><p class="notes">No positions supplied. '
@@ -260,7 +313,7 @@ def _xl(v):
     return None if v is None else "unlimited" if math.isinf(v) else round(v)
 
 
-def write_workbook(path, now, S, summary, rv, table, ideas, book):
+def write_workbook(path, now, S, summary, rv, table, ideas, book, costs):
     from openpyxl import Workbook
     from openpyxl.styles import Font
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -283,12 +336,22 @@ def write_workbook(path, now, S, summary, rv, table, ideas, book):
         ws.append([k, round(v * 100, 2)])
 
     ws = wb.create_sheet("Strategies")
-    ws.append(["Fit", "Strategy", "Expiry", "View", "Net ₹/lot (+credit)", "Max profit", "Max loss",
-               "Breakevens", "Delta", "Gamma", "Theta ₹/day", "Vega ₹/pt", "Legs", "Reasons"])
-    for i in ideas:
-        ws.append([i["fit"], i["name"], i["expiry"], i["view"], round(i["net"]),
-                   _xl(i.get("max_profit")), _xl(i.get("max_loss")),
-                   ", ".join(f"{b:,.0f}" for b in i.get("breakevens") or []),
+    ws.append(["Rank", "Best", "Fit", "Strategy", "Expiry", "View", "Net ₹/lot (+credit)",
+               "Brokerage", "STT", "Exchange+SEBI", "Stamp", "GST", "Slippage", "Total cost",
+               "Net after costs", "EV after costs (20d vol)", "EV after costs (5d vol)", "P(profit)",
+               "Risk ₹", "EV / risk", "Max profit after costs", "Max loss after costs",
+               "Breakevens after costs", "Delta", "Gamma", "Theta ₹/day", "Vega ₹/pt", "Legs", "Reasons"])
+    for n, i in enumerate(ideas, 1):
+        e = i["eval"]
+        ch = e["charges"]
+        ws.append([n, "BEST" if i["best"] else "", i["fit"], i["name"], i["expiry"], i["view"],
+                   round(i["net"]), round(ch["brokerage"]), round(ch["stt"], 2),
+                   round(ch["exchange"] + ch["sebi"], 2), round(ch["stamp"], 2), round(ch["gst"], 2),
+                   round(e["slippage"]), round(e["cost"]), round(e["net_after"]), round(e["ev"]),
+                   _xl(e.get("ev_alt")), round(e["pop"], 3), round(e["risk"]), round(e["ev_on_risk"], 4),
+                   _xl(e.get("max_profit_after", i.get("max_profit"))),
+                   _xl(e.get("max_loss_after", i.get("max_loss"))),
+                   ", ".join(f"{b:,.0f}" for b in e.get("breakevens_after") or i.get("breakevens") or []),
                    round(i["delta"], 1), round(i["gamma"], 4), round(i["theta"]), round(i["vega"]),
                    "; ".join(f"{'Buy' if l['lots'] > 0 else 'Sell'} {l['strike']:.0f}{l['type']} @ {l['price']}"
                              for l in i["legs"]),
@@ -303,6 +366,11 @@ def write_workbook(path, now, S, summary, rv, table, ideas, book):
                    round(r["ce_delta"], 4), round(r["ce_gamma"], 6), round(r["ce_theta"], 2),
                    round(r["ce_vega"], 2), r["pe_ltp"], r["pe_oi"], round(r["pe_delta"], 4),
                    round(r["pe_gamma"], 6), round(r["pe_theta"], 2), round(r["pe_vega"], 2)])
+
+    ws = wb.create_sheet("Costs")
+    ws.append(["Setting", "Value"])
+    for k, v in costs.items():
+        ws.append([k, v])
 
     if book and book["rows"]:
         ws = wb.create_sheet("Positions")
@@ -542,6 +610,11 @@ td:first-child, th:first-child {{ text-align: left; font-family: var(--mono) }}
 .idea li {{ margin-bottom: 4px }}
 .figs {{ font-family: var(--mono); font-size: 12px; margin: 8px 0 0 }}
 .pill {{ font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 10px; border: 1px solid currentColor }}
+.pill.best {{ background: var(--accent); color: var(--bg); border-color: var(--accent) }}
+tr.bestrow td {{ font-weight: 600; color: var(--accent) }}
+.rank td:nth-child(2), .rank th:nth-child(2) {{ text-align: left }}
+table.costs {{ margin-top: 8px; font-size: 12px }}
+table.costs td, table.costs th {{ padding: 2px 8px }}
 .pill.good, .up {{ color: var(--up) }} .pill.bad, .down {{ color: var(--down) }} .pill.warn {{ color: var(--warn) }}
 tr.total td {{ font-weight: 600; border-top: 1px solid var(--fg) }}
 h3 {{ font-size: 14px; margin: 12px 0 6px }}
