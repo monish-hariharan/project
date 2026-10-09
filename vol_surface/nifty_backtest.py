@@ -343,7 +343,11 @@ def run(cfg, store_path, out_dir):
             continue
         snap = _snapshot(df, t0, int(cfg.get("entry_max_stale_minutes", 60)))
         exps = sorted({e for (e, _, _) in snap if e > d})
-        exp = next((e for e in exps if (pd.Timestamp(e) - pd.Timestamp(d)).days >= rules["min_days"]), None)
+        if rules.get("expiry_type") == "monthly":    # monthly = last listed expiry of its calendar month
+            exps = [e for e in exps if e == max(x for x in exps if x[:7] == e[:7])
+                    and pd.Timestamp(e).day + 8 > pd.Timestamp(e).days_in_month]   # and in the month's last week
+        exp = next((e for e in exps if rules["min_days"] <= (pd.Timestamp(e) - pd.Timestamp(d)).days
+                    <= rules.get("max_days", 10_000)), None)
         if not exp:
             continue
         S = _spot_at(df, t0, has_ba) or _spot(snap, exp, has_ba)
