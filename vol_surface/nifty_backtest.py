@@ -234,6 +234,9 @@ def build(snap, expiry, F, T, rules, vix, has_ba):
         tdays = max(T * 252, 1)                     # ≈ trading days to expiry
         E = F * vix / 100 * math.sqrt(tdays / 252)
         out["condor_range"] = condor(near(F - E), near(F + E))
+    pts = rules.get("condor_short_points")
+    if pts:                                         # shorts a fixed number of points either side of spot
+        out["condor_pts"] = condor(near(F - pts), near(F + pts))
     atm = near(F)
     hi, lo = beyond(atm, dw, +1), beyond(atm, dw, -1)
     out["bull"] = [(atm, "CE", 1), (hi, "CE", -1)] if hi else None
