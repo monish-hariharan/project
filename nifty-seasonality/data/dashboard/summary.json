@@ -1,0 +1,21 @@
+[
+ {
+  "first_month": "2006-01",
+  "last_full_month": "2026-09",
+  "n_months": 249,
+  "n_trading_days": 5143,
+  "alpha": 0.05,
+  "overall_mean": 0.010143504443500229,
+  "overall_median": 0.010371764705882525,
+  "overall_win_rate": 0.5823293172690763,
+  "overall_p_t": 0.007294321701183238,
+  "overall_p_sign": 0.011099807431134827,
+  "overall_kruskal_h": 14.621826735513423,
+  "overall_kruskal_p": 0.2004725906911464,
+  "overall_anova_p": 0.4600387323519466,
+  "mtd_month": "2026-10",
+  "mtd_close": 22231.8,
+  "mtd_ret": -0.017181355808571497,
+  "mtd_trading_days": 5
+ }
+]

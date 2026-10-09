@@ -1,0 +1,493 @@
+<style>
+.ns { display: flex; flex-direction: column; gap: var(--cds-gap-lg); font-family: var(--font-anthropic-sans); }
+.ns-head h1 { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); margin: 0; text-wrap: balance; }
+.ns-take { margin: var(--cds-gap-xs) 0 0; max-width: 72ch; font-size: var(--cds-font-size-body); color: var(--color-fg-muted); line-height: 1.5; }
+.ns-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)); gap: var(--cds-gap-md); }
+.ns-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); gap: var(--cds-gap-md); }
+.ns-card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); min-width: 0; display: flex; flex-direction: column; gap: var(--cds-gap-sm); }
+.ns-card h2 { font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); margin: 0; }
+.ns-note { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); margin: 0; line-height: 1.45; }
+.ns-kpi .lab { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.ns-kpi .val { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); font-variant-numeric: tabular-nums; line-height: 1.15; }
+.ns-kpi .sub { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); font-variant-numeric: tabular-nums; }
+.ns-chart { position: relative; min-height: 260px; }
+.ns-chart.tall { min-height: 300px; }
+.ns-scroll { overflow-x: auto; }
+.ns-scroll .ns-chart { min-width: 520px; min-height: 420px; }
+.ns-chart svg { display: block; overflow: visible; }
+.ns-chart text { fill: var(--color-fg-muted); font-size: var(--cds-font-size-caption); font-variant-numeric: tabular-nums; }
+.ns-legend { display: flex; flex-wrap: wrap; gap: var(--cds-gap-xs) var(--cds-gap-md); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); align-items: center; }
+.ns-sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.ns-sw.dot { border-radius: 50%; }
+.ns-sw.ring { border-radius: 50%; background: transparent; border: 2px solid var(--color-fg-muted); width: 8px; height: 8px; }
+.ns-tip { position: absolute; pointer-events: none; z-index: 5; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); border-radius: var(--cds-radius); box-shadow: var(--cds-shadow-popover); padding: var(--cds-pad-xs) var(--cds-pad-sm); font-size: var(--cds-font-size-caption); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ns-tip .t { color: var(--cds-text-secondary); margin-bottom: 2px; }
+.ns-fail { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: inherit; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+.ns-fail::before { content: ""; width: .375rem; height: .375rem; border-radius: 50%; background: var(--color-bad); }
+.ns-table-wrap { overflow: auto; max-height: 34rem; }
+.ns-table { width: 100%; border-collapse: collapse; font-size: var(--cds-font-size-caption); font-variant-numeric: tabular-nums; }
+.ns-table th, .ns-table td { padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--color-border-line); white-space: nowrap; }
+.ns-table th:first-child, .ns-table td:first-child, .ns-table th:nth-child(2), .ns-table td:nth-child(2) { text-align: left; }
+.ns-table th { position: sticky; top: 0; background: var(--color-panel); font-weight: var(--cds-font-weight-medium); color: var(--color-fg-muted); }
+.ns-table th button { all: unset; cursor: pointer; }
+.ns-table th button:focus-visible { outline: 2px solid var(--color-fg); outline-offset: 2px; }
+.ns-table tr.sig td { color: var(--color-fg); font-weight: var(--cds-font-weight-medium); }
+[data-dash-source-state=empty] { color: transparent; }
+[data-dash-source-state=refreshing] { opacity: .5; transition: opacity var(--cds-dur-slow); }
+</style>
+
+<div class="ns">
+  <header class="ns-head" id="top">
+    <h1>NIFTY 50 monthly seasonality</h1>
+    <p class="ns-take dash-skeleton" id="takeaway" data-source="month_stats summary">—</p>
+  </header>
+
+  <section class="ns-kpis" id="headline">
+    <div class="ns-card ns-kpi">
+      <span class="lab">Full months analysed</span>
+      <span class="val dash-skeleton" data-source="summary" data-field="n_months" data-row="0">—</span>
+      <span class="sub"><span class="dash-skeleton" data-source="summary" data-field="first_month" data-row="0">—</span> to <span class="dash-skeleton" data-source="summary" data-field="last_full_month" data-row="0">—</span></span>
+    </div>
+    <div class="ns-card ns-kpi">
+      <span class="lab">Average monthly return, all months</span>
+      <span class="val dash-skeleton" data-source="summary" data-field="overall_mean" data-row="0">—</span>
+      <span class="sub">t-test p = <span class="dash-skeleton" data-source="summary" data-field="overall_p_t" data-row="0">—</span></span>
+    </div>
+    <div class="ns-card ns-kpi">
+      <span class="lab">Months that closed higher</span>
+      <span class="val dash-skeleton" data-source="summary" data-field="overall_win_rate" data-row="0">—</span>
+      <span class="sub">sign test p = <span class="dash-skeleton" data-source="summary" data-field="overall_p_sign" data-row="0">—</span></span>
+    </div>
+    <div class="ns-card ns-kpi">
+      <span class="lab">Month-of-year effect, all 12 together</span>
+      <span class="val dash-skeleton" data-source="summary" data-field="overall_kruskal_p" data-row="0">—</span>
+      <span class="sub">Kruskal-Wallis p-value</span>
+    </div>
+    <div class="ns-card ns-kpi">
+      <span class="lab">October 2026 so far (excluded)</span>
+      <span class="val dash-skeleton" data-source="summary" data-field="mtd_ret" data-row="0">—</span>
+      <span class="sub"><span class="dash-skeleton" data-source="summary" data-field="mtd_trading_days" data-row="0">—</span> trading days, close <span class="dash-skeleton" data-source="summary" data-field="mtd_close" data-row="0">—</span></span>
+    </div>
+  </section>
+
+  <section class="ns-grid">
+    <div class="ns-card" id="mean-card">
+      <h2>Average return by calendar month</h2>
+      <p class="ns-note">Close-to-close return of each month, averaged over every year. Solid bars are significant at the 5% level (one-sample t-test against zero); faded bars could be noise.</p>
+      <div class="ns-legend" id="mean-legend"></div>
+      <div class="ns-chart dash-skeleton" id="mean-chart" data-source="month_stats"></div>
+    </div>
+    <div class="ns-card" id="p-card">
+      <h2>How likely is each month's average just chance?</h2>
+      <p class="ns-note">p-value of the t-test, on a log scale. Left of the 5% line is significant. Rings show the p-value after Benjamini-Hochberg correction for testing 12 months at once.</p>
+      <div class="ns-legend" id="p-legend"></div>
+      <div class="ns-chart tall dash-skeleton" id="p-chart" data-source="month_stats"></div>
+    </div>
+    <div class="ns-card" id="win-card">
+      <h2>Share of years the month closed higher</h2>
+      <p class="ns-note">Win rate per calendar month. The dashed line is a coin flip (50%). Labels show up years out of total.</p>
+      <div class="ns-chart dash-skeleton" id="win-chart" data-source="month_stats"></div>
+    </div>
+    <div class="ns-card" id="price-card">
+      <h2>NIFTY 50 month-end close</h2>
+      <p class="ns-note">Spot index level at each month end, for context on the regimes behind the averages.</p>
+      <div class="ns-chart dash-skeleton" id="price-chart" data-source="monthly_returns"></div>
+    </div>
+  </section>
+
+  <section class="ns-card" id="heat-card">
+    <h2>Every month, every year</h2>
+    <p class="ns-note">Monthly return by year. Blue months rose, red months fell; colour saturates at ±10%. Hover a cell for the exact figure.</p>
+    <div class="ns-legend" id="heat-legend"></div>
+    <div class="ns-scroll"><div class="ns-chart dash-skeleton" id="heat-chart" data-source="monthly_returns"></div></div>
+  </section>
+
+  <section class="ns-card" id="stats-card">
+    <h2>Statistics by month</h2>
+    <p class="ns-note">Verdict uses the t-test at 5%: "Bullish"/"Bearish" when significant, otherwise "Leans" in the direction of the mean. Wilcoxon tests the median, the sign test tests the win rate against 50%, and "vs other months" (Welch t-test) asks whether the month beats the market's normal drift. Click a header to sort.</p>
+    <div class="ns-table-wrap">
+      <table class="ns-table" id="stats-table" data-source="month_stats" data-row-key="month">
+        <thead><tr>
+          <th data-field="month"><button type="button" data-k="order">Month</button></th>
+          <th data-field="verdict"><button type="button" data-k="verdict">Verdict</button></th>
+          <th data-field="n"><button type="button" data-k="n">Years</button></th>
+          <th data-field="mean"><button type="button" data-k="mean">Mean</button></th>
+          <th data-field="median"><button type="button" data-k="median">Median</button></th>
+          <th data-field="win_rate"><button type="button" data-k="win_rate">Win rate</button></th>
+          <th data-field="best"><button type="button" data-k="best">Best</button></th>
+          <th data-field="worst"><button type="button" data-k="worst">Worst</button></th>
+          <th data-field="t_stat"><button type="button" data-k="t_stat">t</button></th>
+          <th data-field="p_t"><button type="button" data-k="p_t">p (t-test)</button></th>
+          <th data-field="p_t_bh"><button type="button" data-k="p_t_bh">p (BH adj.)</button></th>
+          <th data-field="p_wilcoxon"><button type="button" data-k="p_wilcoxon">p (Wilcoxon)</button></th>
+          <th data-field="p_sign"><button type="button" data-k="p_sign">p (sign)</button></th>
+          <th data-field="p_vs_rest"><button type="button" data-k="p_vs_rest">p (vs other months)</button></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="ns-card" id="method">
+    <h2>Method</h2>
+    <p class="ns-note">Data: Dhan API v2 daily candles for the NIFTY 50 spot index, aggregated into calendar months. Dhan's history starts in January 2006. Monthly return is this month's close over last month's close; January 2006 uses its own open. No news, events or announcements are filtered or adjusted for: every month counts equally. The month in progress is shown above but left out of every statistic. With roughly 20 years per month, a single crash or rally year moves an average a lot, so read the median, win rate and Wilcoxon p-value alongside the mean.</p>
+  </section>
+</div>
+
+<script>
+(() => {
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const root = document.getElementById('dash-root') || document.body;
+  const pct = (v, d = 2) => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v * 100).toFixed(d) + '%';
+  const share = d3.format('.1%');
+  const fp = p => p < 0.001 ? '<0.001' : p.toFixed(3);
+  const num = d3.format(',.2f');
+
+  const probe = document.createElement('span');
+  probe.style.display = 'none';
+  root.appendChild(probe);
+  const resolve = c => { probe.style.color = c; return getComputedStyle(probe).color; };
+  const UP = dash.colors[0];
+  const DOWN = dash.colors[7] || 'var(--cds-chart-status-critical)';
+
+  // sort state for the table survives redraws
+  let sortKey = 'order', sortDir = 1;
+
+  function tip(box) {
+    let t = box.querySelector('.ns-tip');
+    if (!t) { t = document.createElement('div'); t.className = 'ns-tip'; t.hidden = true; box.appendChild(t); }
+    return {
+      show(title, lines, x, y) {
+        t.replaceChildren();
+        const h = document.createElement('div'); h.className = 't'; h.textContent = title; t.appendChild(h);
+        lines.forEach(([color, text, ring]) => {
+          const row = document.createElement('div');
+          if (color) { const s = document.createElement('span'); s.className = 'ns-sw' + (ring ? ' ring' : ''); if (ring) s.style.borderColor = color; else s.style.background = color; row.appendChild(s); }
+          row.appendChild(document.createTextNode(text));
+          t.appendChild(row);
+        });
+        t.hidden = false;
+        const bw = box.clientWidth, tw = t.offsetWidth, th = t.offsetHeight;
+        let left = x + 12; if (left + tw > bw) left = x - tw - 12; if (left < 0) left = 0;
+        let top = y - th - 8; if (top < 0) top = y + 12;
+        t.style.left = left + 'px'; t.style.top = top + 'px';
+      },
+      hide() { t.hidden = true; }
+    };
+  }
+
+  function stateOf(el, d) {
+    el.querySelectorAll('svg, .ns-fail').forEach(n => n.remove());
+    if (d.status === 'ok') { el.classList.remove('dash-skeleton'); return true; }
+    if (d.status === 'error' || d.status === 'connect' || d.status === 'declined' || d.status === 'missing') {
+      el.classList.remove('dash-skeleton');
+      const f = document.createElement('div'); f.className = 'ns-fail'; f.textContent = 'Failed to load'; el.appendChild(f);
+    } else el.classList.add('dash-skeleton');
+    return false;
+  }
+
+  function textWidth(svg, strings) {
+    const t = svg.append('text').attr('class', 'measure');
+    let w = 0;
+    strings.forEach(s => { t.text(s); w = Math.max(w, t.node().getComputedTextLength()); });
+    t.remove();
+    return w;
+  }
+
+  function styleAxis(g) {
+    g.attr('font-size', null).attr('font-family', null);
+    g.select('.domain').remove();
+    g.selectAll('.tick line').attr('stroke', 'var(--cds-chart-grid)');
+  }
+
+  function legend(id, items) {
+    const el = document.getElementById(id);
+    el.replaceChildren();
+    items.forEach(([color, label, cls]) => {
+      const s = document.createElement('span');
+      const sw = document.createElement('span'); sw.className = 'ns-sw' + (cls ? ' ' + cls : '');
+      if (cls === 'ring') sw.style.borderColor = color; else sw.style.background = color;
+      if (cls === 'faded') { sw.className = 'ns-sw'; sw.style.opacity = '.4'; }
+      s.appendChild(sw); s.appendChild(document.createTextNode(label));
+      el.appendChild(s);
+    });
+  }
+
+  // ---------- average return bars ----------
+  function drawMean(rows) {
+    const el = document.getElementById('mean-chart');
+    const W = el.clientWidth, H = 260;
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+    const lo = Math.min(0, d3.min(rows, r => Math.min(r.mean, r.median)));
+    const hi = Math.max(0, d3.max(rows, r => Math.max(r.mean, r.median)));
+    const y0 = d3.scaleLinear().domain([lo, hi]).nice();
+    const ticks = y0.ticks(5);
+    const m = { t: 10, r: 4, b: 24, l: textWidth(svg, ticks.map(v => pct(v, 0))) + 10 };
+    const y = y0.range([H - m.b, m.t]);
+    const x = d3.scaleBand().domain(MONTHS).range([m.l, W - m.r]).padding(0.28);
+    svg.append('g').attr('transform', `translate(${m.l - 6},0)`)
+      .call(d3.axisLeft(y).tickValues(ticks).tickFormat(v => pct(v, 0)).tickSize(-(W - m.l - m.r + 6)))
+      .call(styleAxis).selectAll('.tick line').attr('x1', 6);
+    svg.append('g').attr('transform', `translate(0,${H - m.b})`).call(d3.axisBottom(x).tickSize(0).tickPadding(8))
+      .call(g => { g.attr('font-size', null).attr('font-family', null); g.select('.domain').remove(); });
+    svg.append('line').attr('x1', m.l).attr('x2', W - m.r).attr('y1', y(0)).attr('y2', y(0)).attr('stroke', 'var(--cds-chart-axis)');
+    const bw = x.bandwidth();
+    svg.append('g').selectAll('rect').data(rows).join('rect')
+      .attr('x', r => x(r.month)).attr('width', bw)
+      .attr('y', r => Math.min(y(r.mean), y(0))).attr('height', r => Math.max(1, Math.abs(y(r.mean) - y(0))))
+      .attr('rx', Math.min(4, bw / 2)).attr('fill', r => r.mean >= 0 ? UP : DOWN)
+      .attr('fill-opacity', r => r.p_t < 0.05 ? 1 : 0.4);
+    svg.append('g').selectAll('circle').data(rows).join('circle')
+      .attr('cx', r => x(r.month) + bw / 2).attr('cy', r => y(r.median)).attr('r', 4)
+      .attr('fill', 'var(--color-fg)').attr('stroke', 'var(--color-panel)').attr('stroke-width', 2);
+    const tt = tip(el);
+    svg.append('g').selectAll('rect').data(rows).join('rect')
+      .attr('x', r => x(r.month) - x.step() * x.paddingInner() / 2).attr('width', x.step())
+      .attr('y', m.t).attr('height', H - m.t - m.b).attr('fill', 'transparent')
+      .on('pointermove', (ev, r) => {
+        const [px, py] = d3.pointer(ev, el);
+        tt.show(r.month + ' · ' + r.verdict, [
+          [r.mean >= 0 ? UP : DOWN, 'Mean ' + pct(r.mean)],
+          ['var(--color-fg)', 'Median ' + pct(r.median)],
+          [null, 'p (t-test) ' + fp(r.p_t)],
+        ], px, py);
+      }).on('pointerleave', () => tt.hide());
+  }
+
+  // ---------- p-value dot plot ----------
+  function drawP(rows) {
+    const el = document.getElementById('p-chart');
+    const W = el.clientWidth, H = 300;
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+    const minP = d3.min(rows, r => Math.min(r.p_t, r.p_t_bh));
+    const x0 = d3.scaleLog().domain([Math.min(0.001, minP), 1]);
+    const ticks = [0.001, 0.01, 0.05, 0.1, 0.5, 1].filter(v => v >= x0.domain()[0]);
+    const m = { t: 8, r: 16, b: 24, l: textWidth(svg, MONTHS) + 10 };
+    const x = x0.range([m.l, W - m.r]);
+    const y = d3.scaleBand().domain(MONTHS).range([m.t, H - m.b]).padding(0.3);
+    svg.append('g').attr('transform', `translate(0,${H - m.b})`)
+      .call(d3.axisBottom(x).tickValues(ticks).tickFormat(v => v >= 0.05 ? d3.format('.0%')(v) : d3.format('.1%')(v)).tickSize(-(H - m.t - m.b)))
+      .call(styleAxis).selectAll('.tick text').attr('dy', '1.1em');
+    svg.append('g').attr('transform', `translate(${m.l - 6},0)`).call(d3.axisLeft(y).tickSize(0).tickPadding(4))
+      .call(g => { g.attr('font-size', null).attr('font-family', null); g.select('.domain').remove(); });
+    svg.append('line').attr('x1', x(0.05)).attr('x2', x(0.05)).attr('y1', m.t).attr('y2', H - m.b)
+      .attr('stroke', 'var(--cds-chart-reference)').attr('stroke-width', 1.5).attr('stroke-dasharray', '4 3');
+    const cy = r => y(r.month) + y.bandwidth() / 2;
+    svg.append('g').selectAll('line').data(rows).join('line')
+      .attr('x1', r => x(r.p_t)).attr('x2', r => x(r.p_t_bh)).attr('y1', cy).attr('y2', cy)
+      .attr('stroke', 'var(--cds-chart-grid)').attr('stroke-width', 2);
+    svg.append('g').selectAll('circle').data(rows).join('circle')
+      .attr('cx', r => x(r.p_t_bh)).attr('cy', cy).attr('r', 4.5)
+      .attr('fill', 'var(--color-panel)').attr('stroke', r => r.mean >= 0 ? UP : DOWN).attr('stroke-width', 2);
+    svg.append('g').selectAll('circle').data(rows).join('circle')
+      .attr('cx', r => x(r.p_t)).attr('cy', cy).attr('r', 5)
+      .attr('fill', r => r.mean >= 0 ? UP : DOWN).attr('stroke', 'var(--color-panel)').attr('stroke-width', 2);
+    const tt = tip(el);
+    svg.append('g').selectAll('rect').data(rows).join('rect')
+      .attr('x', m.l).attr('width', W - m.l - m.r).attr('y', r => y(r.month) - y.step() * y.paddingInner() / 2).attr('height', y.step())
+      .attr('fill', 'transparent')
+      .on('pointermove', (ev, r) => {
+        const [px, py] = d3.pointer(ev, el);
+        const c = r.mean >= 0 ? UP : DOWN;
+        tt.show(r.month + ' · mean ' + pct(r.mean), [
+          [c, 'p (t-test) ' + fp(r.p_t)],
+          [c, 'p (BH adjusted) ' + fp(r.p_t_bh), true],
+          [null, 'p (Wilcoxon) ' + fp(r.p_wilcoxon)],
+        ], px, py);
+      }).on('pointerleave', () => tt.hide());
+  }
+
+  // ---------- win rate ----------
+  function drawWin(rows) {
+    const el = document.getElementById('win-chart');
+    const W = el.clientWidth, H = 260;
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+    const ticks = [0, 0.25, 0.5, 0.75, 1];
+    const m = { t: 18, r: 4, b: 24, l: textWidth(svg, ticks.map(d3.format('.0%'))) + 10 };
+    const y = d3.scaleLinear().domain([0, 1]).range([H - m.b, m.t]);
+    const x = d3.scaleBand().domain(MONTHS).range([m.l, W - m.r]).padding(0.28);
+    svg.append('g').attr('transform', `translate(${m.l - 6},0)`)
+      .call(d3.axisLeft(y).tickValues(ticks).tickFormat(d3.format('.0%')).tickSize(-(W - m.l - m.r + 6)))
+      .call(styleAxis).selectAll('.tick line').attr('x1', 6);
+    svg.append('g').attr('transform', `translate(0,${H - m.b})`).call(d3.axisBottom(x).tickSize(0).tickPadding(8))
+      .call(g => { g.attr('font-size', null).attr('font-family', null); g.select('.domain').remove(); });
+    const bw = x.bandwidth();
+    svg.append('g').selectAll('rect').data(rows).join('rect')
+      .attr('x', r => x(r.month)).attr('width', bw).attr('y', r => y(r.win_rate)).attr('height', r => y(0) - y(r.win_rate))
+      .attr('rx', Math.min(4, bw / 2)).attr('fill', r => r.win_rate >= 0.5 ? UP : DOWN)
+      .attr('fill-opacity', r => r.p_sign < 0.05 ? 1 : 0.4);
+    svg.append('line').attr('x1', m.l).attr('x2', W - m.r).attr('y1', y(0.5)).attr('y2', y(0.5))
+      .attr('stroke', 'var(--cds-chart-reference)').attr('stroke-width', 1.5).attr('stroke-dasharray', '4 3');
+    if (bw >= 22) {
+      svg.append('g').selectAll('text').data(rows).join('text')
+        .attr('x', r => x(r.month) + bw / 2).attr('y', r => y(r.win_rate) - 5).attr('text-anchor', 'middle')
+        .text(r => r.up + '/' + r.n);
+    }
+    const tt = tip(el);
+    svg.append('g').selectAll('rect').data(rows).join('rect')
+      .attr('x', r => x(r.month) - x.step() * x.paddingInner() / 2).attr('width', x.step())
+      .attr('y', m.t).attr('height', H - m.t - m.b).attr('fill', 'transparent')
+      .on('pointermove', (ev, r) => {
+        const [px, py] = d3.pointer(ev, el);
+        tt.show(r.month, [
+          [r.win_rate >= 0.5 ? UP : DOWN, 'Up ' + r.up + ' of ' + r.n + ' years (' + share(r.win_rate) + ')'],
+          [null, 'p (sign test) ' + fp(r.p_sign)],
+        ], px, py);
+      }).on('pointerleave', () => tt.hide());
+  }
+
+  // ---------- price line ----------
+  function drawPrice(rows) {
+    const el = document.getElementById('price-chart');
+    const W = el.clientWidth, H = 260;
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+    const pts = rows.map(r => ({ d: new Date(r.month + '-01T00:00:00Z'), c: +r.close, r: +r.ret, label: r.mon + ' ' + r.year }));
+    const y0 = d3.scaleLinear().domain([0, d3.max(pts, p => p.c)]).nice();
+    const ticks = y0.ticks(5);
+    const fmtY = v => d3.format(',')(v);
+    const m = { t: 10, r: 8, b: 24, l: textWidth(svg, ticks.map(fmtY)) + 10 };
+    const y = y0.range([H - m.b, m.t]);
+    const x = d3.scaleUtc().domain(d3.extent(pts, p => p.d)).range([m.l, W - m.r]);
+    svg.append('g').attr('transform', `translate(${m.l - 6},0)`)
+      .call(d3.axisLeft(y).tickValues(ticks).tickFormat(fmtY).tickSize(-(W - m.l - m.r + 6)))
+      .call(styleAxis).selectAll('.tick line').attr('x1', 6);
+    const yearTicks = x.ticks(W < 420 ? 4 : 7);
+    svg.append('g').attr('transform', `translate(0,${H - m.b})`).call(d3.axisBottom(x).tickValues(yearTicks).tickFormat(d3.utcFormat('%Y')).tickSize(0).tickPadding(8))
+      .call(g => { g.attr('font-size', null).attr('font-family', null); g.select('.domain').remove(); });
+    const gid = 'ns-price-grad';
+    const grad = svg.append('defs').append('linearGradient').attr('id', gid).attr('x1', 0).attr('x2', 0).attr('y1', 0).attr('y2', 1);
+    [[0, .26], [.25, .16], [.5, .08], [.75, .03], [1, 0]].forEach(([o, a]) =>
+      grad.append('stop').attr('offset', o).attr('style', `stop-color: ${UP}; stop-opacity: ${a}`));
+    svg.append('path').datum(pts).attr('fill', `url(#${gid})`)
+      .attr('d', d3.area().x(p => x(p.d)).y0(y(0)).y1(p => y(p.c)));
+    svg.append('path').datum(pts).attr('fill', 'none').attr('stroke', UP).attr('stroke-width', 2)
+      .attr('stroke-linejoin', 'round').attr('stroke-linecap', 'round')
+      .attr('d', d3.line().x(p => x(p.d)).y(p => y(p.c)));
+    const last = pts[pts.length - 1];
+    svg.append('circle').attr('cx', x(last.d)).attr('cy', y(last.c)).attr('r', 4).attr('fill', UP).attr('stroke', 'var(--color-panel)').attr('stroke-width', 2);
+    const rule = svg.append('line').attr('y1', m.t).attr('y2', H - m.b).attr('stroke', 'var(--cds-chart-axis)').attr('visibility', 'hidden');
+    const dot = svg.append('circle').attr('r', 4).attr('fill', UP).attr('stroke', 'var(--color-panel)').attr('stroke-width', 2).attr('visibility', 'hidden');
+    const tt = tip(el);
+    const bis = d3.bisector(p => p.d).center;
+    svg.append('rect').attr('x', m.l).attr('width', W - m.l - m.r).attr('y', m.t).attr('height', H - m.t - m.b).attr('fill', 'transparent')
+      .on('pointermove', ev => {
+        const [px, py] = d3.pointer(ev, el);
+        const p = pts[bis(pts, x.invert(d3.pointer(ev)[0]))];
+        rule.attr('x1', x(p.d)).attr('x2', x(p.d)).attr('visibility', 'visible');
+        dot.attr('cx', x(p.d)).attr('cy', y(p.c)).attr('visibility', 'visible');
+        tt.show(p.label, [[null, 'Close ' + num(p.c)], [null, 'Month ' + pct(p.r)]], px, py);
+      }).on('pointerleave', () => { tt.hide(); rule.attr('visibility', 'hidden'); dot.attr('visibility', 'hidden'); });
+  }
+
+  // ---------- heatmap ----------
+  function drawHeat(rows) {
+    const el = document.getElementById('heat-chart');
+    const W = el.clientWidth;
+    const years = [...new Set(rows.map(r => +r.year))].sort((a, b) => a - b);
+    const cellH = 18, gap = 2;
+    const svg = d3.select(el).append('svg').attr('width', '100%');
+    const m = { t: 20, r: 0, b: 4, l: textWidth(svg, years.map(String)) + 10 };
+    const H = m.t + years.length * cellH + m.b;
+    svg.attr('viewBox', `0 0 ${W} ${H}`);
+    el.style.minHeight = H + 'px';
+    const x = d3.scaleBand().domain(MONTHS).range([m.l, W - m.r]);
+    const y = d3.scaleBand().domain(years).range([m.t, H - m.b]);
+    const up = resolve(UP), down = resolve(DOWN), mid = resolve('var(--cds-chart-grid)');
+    const color = v => { const t = Math.max(-1, Math.min(1, v / 0.10)); return t >= 0 ? d3.interpolateRgb(mid, up)(t) : d3.interpolateRgb(mid, down)(-t); };
+    svg.append('g').selectAll('text').data(MONTHS).join('text')
+      .attr('x', mo => x(mo) + x.bandwidth() / 2).attr('y', m.t - 7).attr('text-anchor', 'middle').text(mo => mo);
+    svg.append('g').selectAll('text').data(years).join('text')
+      .attr('x', m.l - 8).attr('y', yr => y(yr) + cellH / 2).attr('dy', '0.35em').attr('text-anchor', 'end').text(yr => yr);
+    const tt = tip(el);
+    svg.append('g').selectAll('rect').data(rows).join('rect')
+      .attr('x', r => x(r.mon) + gap / 2).attr('y', r => y(+r.year) + gap / 2)
+      .attr('width', x.bandwidth() - gap).attr('height', cellH - gap).attr('rx', 2)
+      .attr('fill', r => color(+r.ret))
+      .on('pointermove', (ev, r) => {
+        const [px, py] = d3.pointer(ev, el);
+        tt.show(r.mon + ' ' + r.year, [[+r.ret >= 0 ? UP : DOWN, 'Return ' + pct(+r.ret)], [null, 'Close ' + num(+r.close)]], px, py);
+      }).on('pointerleave', () => tt.hide());
+    legend('heat-legend', [[down, '−10% or worse'], [mid, '0%'], [up, '+10% or better']]);
+  }
+
+  // ---------- table ----------
+  function drawTable(rows) {
+    const tbody = document.querySelector('#stats-table tbody');
+    const order = Object.fromEntries(MONTHS.map((mo, i) => [mo, i]));
+    const keyed = rows.map(r => ({ ...r, order: order[r.month] }));
+    keyed.sort((a, b) => {
+      const va = a[sortKey], vb = b[sortKey];
+      return (typeof va === 'string' ? va.localeCompare(vb) : va - vb) * sortDir;
+    });
+    tbody.replaceChildren();
+    keyed.forEach(r => {
+      const tr = document.createElement('tr');
+      if (r.p_t < 0.05) tr.className = 'sig';
+      [r.month, r.verdict, String(r.n), pct(r.mean), pct(r.median), share(r.win_rate), pct(r.best), pct(r.worst),
+       r.t_stat.toFixed(2), fp(r.p_t), fp(r.p_t_bh), fp(r.p_wilcoxon), fp(r.p_sign), fp(r.p_vs_rest)].forEach(v => {
+        const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    document.querySelectorAll('#stats-table th').forEach(th => {
+      const k = th.querySelector('button').dataset.k;
+      th.setAttribute('aria-sort', k === sortKey ? (sortDir > 0 ? 'ascending' : 'descending') : 'none');
+    });
+  }
+
+  document.querySelectorAll('#stats-table th button').forEach(b => b.addEventListener('click', () => {
+    const k = b.dataset.k;
+    if (k === sortKey) sortDir = -sortDir; else { sortKey = k; sortDir = (k === 'order' || k === 'verdict') ? 1 : -1; }
+    const d = dash.data('month_stats');
+    if (d.status === 'ok') drawTable(d.data);
+  }));
+
+  function fillSummary(s) {
+    const set = (field, text) => document.querySelectorAll(`[data-source="summary"][data-field="${field}"]`).forEach(e => { e.textContent = text; e.classList.remove('dash-skeleton'); });
+    set('n_months', String(s.n_months));
+    set('first_month', d3.utcFormat('%b %Y')(new Date(s.first_month + '-01T00:00:00Z')));
+    set('last_full_month', d3.utcFormat('%b %Y')(new Date(s.last_full_month + '-01T00:00:00Z')));
+    set('overall_mean', pct(s.overall_mean));
+    set('overall_p_t', fp(s.overall_p_t));
+    set('overall_win_rate', share(s.overall_win_rate));
+    set('overall_p_sign', fp(s.overall_p_sign));
+    set('overall_kruskal_p', s.overall_kruskal_p.toFixed(2));
+    set('mtd_ret', s.mtd_ret == null ? '—' : pct(s.mtd_ret));
+    set('mtd_trading_days', s.mtd_trading_days == null ? '—' : String(s.mtd_trading_days));
+    set('mtd_close', s.mtd_close == null ? '—' : num(s.mtd_close));
+  }
+
+  function takeaway(stats, s) {
+    const el = document.getElementById('takeaway');
+    const names = { Jan: 'January', Feb: 'February', Mar: 'March', Apr: 'April', May: 'May', Jun: 'June', Jul: 'July', Aug: 'August', Sep: 'September', Oct: 'October', Nov: 'November', Dec: 'December' };
+    const list = a => a.length <= 1 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
+    const bull = stats.filter(r => r.verdict === 'Bullish').map(r => names[r.month]);
+    const bear = stats.filter(r => r.verdict === 'Bearish').map(r => names[r.month]);
+    const worst = stats.reduce((a, b) => a.mean < b.mean ? a : b);
+    let t = bull.length ? `${list(bull)} ${bull.length > 1 ? 'are' : 'is'} bullish at the 5% level. ` : 'No month is reliably bullish at the 5% level. ';
+    t += bear.length ? `${list(bear)} ${bear.length > 1 ? 'are' : 'is'} reliably bearish. ` : `No month is reliably bearish; ${names[worst.month]} is the weakest at ${pct(worst.mean)} on average, which could be chance. `;
+    t += `Taken together, the month of the year does not significantly change returns (Kruskal-Wallis p = ${s.overall_kruskal_p.toFixed(2)}), so treat these as tendencies, not rules.`;
+    el.textContent = t;
+    el.classList.remove('dash-skeleton');
+  }
+
+  legend('mean-legend', [[UP, 'Positive mean'], [DOWN, 'Negative mean'], [UP, 'Not significant', 'faded'], ['var(--color-fg)', 'Median', 'dot']]);
+  legend('p-legend', [[UP, 'Bullish side', 'dot'], [DOWN, 'Bearish side', 'dot'], ['var(--color-fg-muted)', 'BH adjusted', 'ring']]);
+
+  dash.onData(() => {
+    const ms = dash.data('month_stats');
+    const mr = dash.data('monthly_returns');
+    const sm = dash.data('summary');
+    const msRows = ms.status === 'ok' ? ms.data.map(r => ({ ...r })) : null;
+
+    if (stateOf(document.getElementById('mean-chart'), ms)) drawMean(msRows);
+    if (stateOf(document.getElementById('p-chart'), ms)) drawP(msRows);
+    if (stateOf(document.getElementById('win-chart'), ms)) drawWin(msRows);
+    if (stateOf(document.getElementById('price-chart'), mr)) drawPrice(mr.data);
+    if (stateOf(document.getElementById('heat-chart'), mr)) drawHeat(mr.data);
+    if (ms.status === 'ok') drawTable(msRows); else document.querySelector('#stats-table tbody').replaceChildren();
+    if (sm.status === 'ok' && sm.data.length) fillSummary(sm.data[0]);
+    if (ms.status === 'ok' && sm.status === 'ok' && sm.data.length) takeaway(msRows, sm.data[0]);
+  });
+})();
+</script>
