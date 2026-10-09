@@ -367,5 +367,256 @@
     "condor": "backtest/bhav (NSE bhavcopy, daily)",
     "condor_range": "backtest/bhav (NSE bhavcopy, daily)"
   },
-  "notes": "Debit spreads: intraday replay of your own data (v3). Condors: NSE bhavcopy end-of-day closes 2019-2026 (v3 data lacked far-OTM strikes). Bhavcopy stops are checked at the daily close only, so real losses on stop-outs would usually be smaller, and gap days larger. 7 bhavcopy trades with stale closing prices (no-arbitrage violations) excluded. Regime split not available for condors (end-of-day data has no intraday high/low)."
+  "notes": "Debit spreads: intraday replay of your own data (v3). Condors: NSE bhavcopy end-of-day closes 2019-2026 (v3 data lacked far-OTM strikes). Bhavcopy stops are checked at the daily close only, so real losses on stop-outs would usually be smaller, and gap days larger. 7 bhavcopy trades with stale closing prices (no-arbitrage violations) excluded. Regime split not available for condors (end-of-day data has no intraday high/low).",
+  "monthly": {
+    "families": {
+      "bear": {
+        "n": 1877,
+        "win_rate": 0.36281299946723494,
+        "expectancy": -915.0735162493341,
+        "avg_win": 2669.3642878120413,
+        "avg_loss": -2956.0452090301005,
+        "worst": -6672.77,
+        "best": 11966.17,
+        "profit_factor": 0.5141770715323468,
+        "max_dd_median": 2315.23,
+        "max_dd_worst": 8596.25,
+        "stop_rate": 0.6361214704315397,
+        "total_pnl": -1717592.9900000002,
+        "period": "2019-02 to 2026-10, monthly expiries only (NSE bhavcopy, daily closes)",
+        "expiries": 94,
+        "data": "1877 daily entries on 94 monthly expiries, 12-45 days out; stops checked at the close"
+      },
+      "bull": {
+        "n": 1877,
+        "win_rate": 0.40277037826318596,
+        "expectancy": -1309.8532285562067,
+        "avg_win": 3005.8847222222225,
+        "avg_loss": -4220.377662801071,
+        "worst": -9880.93,
+        "best": 7619.9,
+        "profit_factor": 0.4803272084151856,
+        "max_dd_median": 3379.97,
+        "max_dd_worst": 10595.0,
+        "stop_rate": 0.5892381459776239,
+        "total_pnl": -2458594.51,
+        "period": "2019-02 to 2026-10, monthly expiries only (NSE bhavcopy, daily closes)",
+        "expiries": 94,
+        "data": "1877 daily entries on 94 monthly expiries, 12-45 days out; stops checked at the close"
+      },
+      "condor": {
+        "n": 1830,
+        "win_rate": 0.6759562841530055,
+        "expectancy": -576.9251584699454,
+        "avg_win": 1146.0007841552142,
+        "avg_loss": -4170.954485666104,
+        "worst": -9072.23,
+        "best": 11201.43,
+        "profit_factor": 0.5731449501687372,
+        "max_dd_median": 1366.625,
+        "max_dd_worst": 8999.25,
+        "stop_rate": 0.2972677595628415,
+        "total_pnl": -1055773.04,
+        "period": "2019-02 to 2026-10, monthly expiries only (NSE bhavcopy, daily closes)",
+        "expiries": 94,
+        "data": "1830 daily entries on 94 monthly expiries, 12-45 days out; stops checked at the close"
+      },
+      "condor_range": {
+        "n": 1213,
+        "win_rate": 0.674361088211047,
+        "expectancy": -748.7809727947238,
+        "avg_win": 924.6410024449879,
+        "avg_loss": -4214.247240506329,
+        "worst": -11533.56,
+        "best": 11133.35,
+        "profit_factor": 0.4543696816860535,
+        "max_dd_median": 1348.75,
+        "max_dd_worst": 9514.34,
+        "stop_rate": 0.27699917559769166,
+        "total_pnl": -908271.32,
+        "period": "2019-02 to 2026-10, monthly expiries only (NSE bhavcopy, daily closes)",
+        "expiries": 64,
+        "data": "1213 daily entries on 64 monthly expiries, 12-45 days out; stops checked at the close"
+      }
+    },
+    "by_vol_edge": {
+      "bear": {
+        "Rich": {
+          "n": 991,
+          "win_rate": 0.3440968718466196,
+          "expectancy": -1009.3928758829466,
+          "avg_win": 2568.6126392961874,
+          "avg_loss": -2886.4696153846153,
+          "worst": -6672.77,
+          "best": 6235.33,
+          "profit_factor": 0.46684493074518363,
+          "max_dd_median": 2307.5,
+          "max_dd_worst": 6035.25,
+          "stop_rate": 0.6538849646821393,
+          "total_pnl": -1000308.3400000001
+        },
+        "Fair": {
+          "n": 636,
+          "win_rate": 0.3915094339622642,
+          "expectancy": -746.7724528301887,
+          "avg_win": 2724.3022088353414,
+          "avg_loss": -2980.099560723515,
+          "worst": -5170.09,
+          "best": 11966.17,
+          "profit_factor": 0.5881835729037128,
+          "max_dd_median": 2314.0299999999997,
+          "max_dd_worst": 7195.5,
+          "stop_rate": 0.6084905660377359,
+          "total_pnl": -474947.28
+        },
+        "Cheap": {
+          "n": 250,
+          "win_rate": 0.364,
+          "expectancy": -969.3494800000001,
+          "avg_win": 2896.581538461539,
+          "avg_loss": -3181.926352201258,
+          "worst": -6254.74,
+          "best": 6207.61,
+          "profit_factor": 0.5210026148275474,
+          "max_dd_median": 2346.875,
+          "max_dd_worst": 8596.25,
+          "stop_rate": 0.636,
+          "total_pnl": -242337.37000000002
+        }
+      },
+      "bull": {
+        "Rich": {
+          "n": 993,
+          "win_rate": 0.4380664652567976,
+          "expectancy": -1055.9189425981874,
+          "avg_win": 3033.8121149425288,
+          "avg_loss": -4244.150143369176,
+          "worst": -8947.88,
+          "best": 5819.98,
+          "profit_factor": 0.5572537503001497,
+          "max_dd_median": 3281.33,
+          "max_dd_worst": 10595.0,
+          "stop_rate": 0.5579053373615307,
+          "total_pnl": -1048527.51
+        },
+        "Fair": {
+          "n": 635,
+          "win_rate": 0.3401574803149606,
+          "expectancy": -1757.6554645669291,
+          "avg_win": 2975.0388425925926,
+          "avg_loss": -4197.421503579952,
+          "worst": -8040.8,
+          "best": 7619.9,
+          "profit_factor": 0.3653842183518953,
+          "max_dd_median": 3568.5,
+          "max_dd_worst": 9844.25,
+          "stop_rate": 0.6519685039370079,
+          "total_pnl": -1116111.22
+        },
+        "Cheap": {
+          "n": 249,
+          "win_rate": 0.42168674698795183,
+          "expectancy": -1180.5453012048195,
+          "avg_win": 2953.6399047619047,
+          "avg_loss": -4195.055347222222,
+          "worst": -9880.93,
+          "best": 6264.39,
+          "profit_factor": 0.5133891178134204,
+          "max_dd_median": 3253.64,
+          "max_dd_worst": 8076.25,
+          "stop_rate": 0.5542168674698795,
+          "total_pnl": -293955.78
+        }
+      },
+      "condor": {
+        "Rich": {
+          "n": 960,
+          "win_rate": 0.6770833333333334,
+          "expectancy": -605.60165625,
+          "avg_win": 1158.3915846153845,
+          "avg_loss": -4304.297161290323,
+          "worst": -7978.76,
+          "best": 11201.43,
+          "profit_factor": 0.5642931911134688,
+          "max_dd_median": 1305.35,
+          "max_dd_worst": 7601.75,
+          "stop_rate": 0.29791666666666666,
+          "total_pnl": -581377.59
+        },
+        "Fair": {
+          "n": 624,
+          "win_rate": 0.6746794871794872,
+          "expectancy": -561.5929166666666,
+          "avg_win": 1136.482897862233,
+          "avg_loss": -4083.2181280788177,
+          "worst": -9072.23,
+          "best": 4845.44,
+          "profit_factor": 0.5772266605901305,
+          "max_dd_median": 1466.8400000000001,
+          "max_dd_worst": 8999.25,
+          "stop_rate": 0.30288461538461536,
+          "total_pnl": -350433.98
+        },
+        "Cheap": {
+          "n": 246,
+          "win_rate": 0.6747967479674797,
+          "expectancy": -503.90841463414625,
+          "avg_win": 1121.621325301205,
+          "avg_loss": -3876.8826249999997,
+          "worst": -7178.34,
+          "best": 3198.25,
+          "profit_factor": 0.6003184710808727,
+          "max_dd_median": 1436.5,
+          "max_dd_worst": 6776.25,
+          "stop_rate": 0.2804878048780488,
+          "total_pnl": -123961.46999999997
+        }
+      },
+      "condor_range": {
+        "Rich": {
+          "n": 659,
+          "win_rate": 0.6767830045523521,
+          "expectancy": -743.6283459787558,
+          "avg_win": 967.8529820627803,
+          "avg_loss": -4327.293474178404,
+          "worst": -7994.29,
+          "best": 11133.35,
+          "profit_factor": 0.4683260311547348,
+          "max_dd_median": 1251.25,
+          "max_dd_worst": 7452.25,
+          "stop_rate": 0.2822458270106222,
+          "total_pnl": -490051.08
+        },
+        "Fair": {
+          "n": 425,
+          "win_rate": 0.6847058823529412,
+          "expectancy": -741.4326352941176,
+          "avg_win": 902.8075257731958,
+          "avg_loss": -4312.1332835820895,
+          "worst": -11533.56,
+          "best": 1965.49,
+          "profit_factor": 0.4546646458502221,
+          "max_dd_median": 1325.16,
+          "max_dd_worst": 9514.34,
+          "stop_rate": 0.2776470588235294,
+          "total_pnl": -315108.87
+        },
+        "Cheap": {
+          "n": 129,
+          "win_rate": 0.627906976744186,
+          "expectancy": -799.312945736434,
+          "avg_win": 765.1471604938272,
+          "avg_loss": -3439.339375,
+          "worst": -6707.31,
+          "best": 1989.32,
+          "profit_factor": 0.37541681484495354,
+          "max_dd_median": 1540.5,
+          "max_dd_worst": 5437.25,
+          "stop_rate": 0.24806201550387597,
+          "total_pnl": -103111.37
+        }
+      }
+    },
+    "note": "Used by the dashboard when the suggested expiry is a monthly expiry. Entries every trading day overlap, so n overstates independent samples (see 'expiries')."
+  }
 }

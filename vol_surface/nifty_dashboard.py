@@ -225,6 +225,13 @@ def main():
     edge = eng.vol_edge(target["atm_iv"], vf["forecast"], rules)
     prev_day = dict(high=float(nifty["high"][-1]), low=float(nifty["low"][-1]))
     reg = eng.regime(S, prev_day, vf, Z, rules)
+    exps = [r["expiry"] for r in summary]
+    te = datetime.strptime(target["expiry"], "%Y-%m-%d")
+    monthly = (target["expiry"] == max(e for e in exps if e[:7] == target["expiry"][:7])
+               and te.day + 8 > __import__("calendar").monthrange(te.year, te.month)[1])
+    if backtest and monthly and backtest.get("monthly"):     # use the monthly-expiry record for a monthly expiry
+        backtest = dict(backtest, families={**backtest["families"], **backtest["monthly"]["families"]},
+                        by_regime={})
     hist = hist_merge(backtest, paper_stats(paper_book), rules.get("min_history_trades", 20), reg["label"])
     rank(ideas, costs, hist)
     gex = eng.gex_profile(table, S)

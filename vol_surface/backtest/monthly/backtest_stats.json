@@ -1,0 +1,414 @@
+{
+  "generated": "2026-10-10T04:33:31",
+  "period": "2019-01-01 to 2026-10-09",
+  "fills": [
+    "ltp+slippage"
+  ],
+  "settings": {
+    "entry_time": "15:00",
+    "entry_every_n_days": 1,
+    "check_every_minutes": 1,
+    "max_stale_minutes": 1,
+    "min_coverage": 0.5,
+    "report_lot": 65
+  },
+  "pnl_basis": "\u20b9 per lot of 65 (P&L scaled from each trade's actual lot size)",
+  "trades_total": 8655,
+  "excluded_low_coverage": 3,
+  "dropped": {
+    "no expiry data": 26,
+    "legs never priced": 4,
+    "stale prices (no-arbitrage)": 18
+  },
+  "families": {
+    "bear": {
+      "n": 1877,
+      "win_rate": 0.36281299946723494,
+      "expectancy": -915.0735162493341,
+      "avg_win": 2669.3642878120413,
+      "avg_loss": -2956.0452090301005,
+      "worst": -6672.77,
+      "best": 11966.17,
+      "profit_factor": 0.5141770715323468,
+      "max_dd_median": 2315.23,
+      "max_dd_worst": 8596.25,
+      "stop_rate": 0.6361214704315397,
+      "total_pnl": -1717592.9900000002
+    },
+    "bull": {
+      "n": 1877,
+      "win_rate": 0.40277037826318596,
+      "expectancy": -1309.8532285562067,
+      "avg_win": 3005.8847222222225,
+      "avg_loss": -4220.377662801071,
+      "worst": -9880.93,
+      "best": 7619.9,
+      "profit_factor": 0.4803272084151856,
+      "max_dd_median": 3379.97,
+      "max_dd_worst": 10595.0,
+      "stop_rate": 0.5892381459776239,
+      "total_pnl": -2458594.51
+    },
+    "condor": {
+      "n": 1830,
+      "win_rate": 0.6759562841530055,
+      "expectancy": -576.9251584699454,
+      "avg_win": 1146.0007841552142,
+      "avg_loss": -4170.954485666104,
+      "worst": -9072.23,
+      "best": 11201.43,
+      "profit_factor": 0.5731449501687372,
+      "max_dd_median": 1366.625,
+      "max_dd_worst": 8999.25,
+      "stop_rate": 0.2972677595628415,
+      "total_pnl": -1055773.04
+    },
+    "condor_pts": {
+      "n": 1855,
+      "win_rate": 0.4064690026954178,
+      "expectancy": -1050.3157466307277,
+      "avg_win": 1534.9170424403183,
+      "avg_loss": -2820.7658128973662,
+      "worst": -10256.24,
+      "best": 5104.61,
+      "profit_factor": 0.3726506676274577,
+      "max_dd_median": 1547.0,
+      "max_dd_worst": 7447.12,
+      "stop_rate": 0.5735849056603773,
+      "total_pnl": -1948335.71
+    },
+    "condor_range": {
+      "n": 1213,
+      "win_rate": 0.674361088211047,
+      "expectancy": -748.7809727947238,
+      "avg_win": 924.6410024449879,
+      "avg_loss": -4214.247240506329,
+      "worst": -11533.56,
+      "best": 11133.35,
+      "profit_factor": 0.4543696816860535,
+      "max_dd_median": 1348.75,
+      "max_dd_worst": 9514.34,
+      "stop_rate": 0.27699917559769166,
+      "total_pnl": -908271.32
+    }
+  },
+  "by_regime": {
+    "bear": {
+      "Range": null,
+      "Trend": null,
+      "Mixed": null,
+      "n/a": {
+        "n": 1877,
+        "win_rate": 0.36281299946723494,
+        "expectancy": -915.0735162493341,
+        "avg_win": 2669.3642878120413,
+        "avg_loss": -2956.0452090301005,
+        "worst": -6672.77,
+        "best": 11966.17,
+        "profit_factor": 0.5141770715323468,
+        "max_dd_median": 2315.23,
+        "max_dd_worst": 8596.25,
+        "stop_rate": 0.6361214704315397,
+        "total_pnl": -1717592.9900000002
+      }
+    },
+    "bull": {
+      "Range": null,
+      "Trend": null,
+      "Mixed": null,
+      "n/a": {
+        "n": 1877,
+        "win_rate": 0.40277037826318596,
+        "expectancy": -1309.8532285562067,
+        "avg_win": 3005.8847222222225,
+        "avg_loss": -4220.377662801071,
+        "worst": -9880.93,
+        "best": 7619.9,
+        "profit_factor": 0.4803272084151856,
+        "max_dd_median": 3379.97,
+        "max_dd_worst": 10595.0,
+        "stop_rate": 0.5892381459776239,
+        "total_pnl": -2458594.51
+      }
+    },
+    "condor": {
+      "Range": null,
+      "Trend": null,
+      "Mixed": null,
+      "n/a": {
+        "n": 1830,
+        "win_rate": 0.6759562841530055,
+        "expectancy": -576.9251584699454,
+        "avg_win": 1146.0007841552142,
+        "avg_loss": -4170.954485666104,
+        "worst": -9072.23,
+        "best": 11201.43,
+        "profit_factor": 0.5731449501687372,
+        "max_dd_median": 1366.625,
+        "max_dd_worst": 8999.25,
+        "stop_rate": 0.2972677595628415,
+        "total_pnl": -1055773.04
+      }
+    },
+    "condor_pts": {
+      "Range": null,
+      "Trend": null,
+      "Mixed": null,
+      "n/a": {
+        "n": 1855,
+        "win_rate": 0.4064690026954178,
+        "expectancy": -1050.3157466307277,
+        "avg_win": 1534.9170424403183,
+        "avg_loss": -2820.7658128973662,
+        "worst": -10256.24,
+        "best": 5104.61,
+        "profit_factor": 0.3726506676274577,
+        "max_dd_median": 1547.0,
+        "max_dd_worst": 7447.12,
+        "stop_rate": 0.5735849056603773,
+        "total_pnl": -1948335.71
+      }
+    },
+    "condor_range": {
+      "Range": null,
+      "Trend": null,
+      "Mixed": null,
+      "n/a": {
+        "n": 1213,
+        "win_rate": 0.674361088211047,
+        "expectancy": -748.7809727947238,
+        "avg_win": 924.6410024449879,
+        "avg_loss": -4214.247240506329,
+        "worst": -11533.56,
+        "best": 11133.35,
+        "profit_factor": 0.4543696816860535,
+        "max_dd_median": 1348.75,
+        "max_dd_worst": 9514.34,
+        "stop_rate": 0.27699917559769166,
+        "total_pnl": -908271.32
+      }
+    }
+  },
+  "by_vol_edge": {
+    "bear": {
+      "Rich": {
+        "n": 991,
+        "win_rate": 0.3440968718466196,
+        "expectancy": -1009.3928758829466,
+        "avg_win": 2568.6126392961874,
+        "avg_loss": -2886.4696153846153,
+        "worst": -6672.77,
+        "best": 6235.33,
+        "profit_factor": 0.46684493074518363,
+        "max_dd_median": 2307.5,
+        "max_dd_worst": 6035.25,
+        "stop_rate": 0.6538849646821393,
+        "total_pnl": -1000308.3400000001
+      },
+      "Fair": {
+        "n": 636,
+        "win_rate": 0.3915094339622642,
+        "expectancy": -746.7724528301887,
+        "avg_win": 2724.3022088353414,
+        "avg_loss": -2980.099560723515,
+        "worst": -5170.09,
+        "best": 11966.17,
+        "profit_factor": 0.5881835729037128,
+        "max_dd_median": 2314.0299999999997,
+        "max_dd_worst": 7195.5,
+        "stop_rate": 0.6084905660377359,
+        "total_pnl": -474947.28
+      },
+      "Cheap": {
+        "n": 250,
+        "win_rate": 0.364,
+        "expectancy": -969.3494800000001,
+        "avg_win": 2896.581538461539,
+        "avg_loss": -3181.926352201258,
+        "worst": -6254.74,
+        "best": 6207.61,
+        "profit_factor": 0.5210026148275474,
+        "max_dd_median": 2346.875,
+        "max_dd_worst": 8596.25,
+        "stop_rate": 0.636,
+        "total_pnl": -242337.37000000002
+      }
+    },
+    "bull": {
+      "Rich": {
+        "n": 993,
+        "win_rate": 0.4380664652567976,
+        "expectancy": -1055.9189425981874,
+        "avg_win": 3033.8121149425288,
+        "avg_loss": -4244.150143369176,
+        "worst": -8947.88,
+        "best": 5819.98,
+        "profit_factor": 0.5572537503001497,
+        "max_dd_median": 3281.33,
+        "max_dd_worst": 10595.0,
+        "stop_rate": 0.5579053373615307,
+        "total_pnl": -1048527.51
+      },
+      "Fair": {
+        "n": 635,
+        "win_rate": 0.3401574803149606,
+        "expectancy": -1757.6554645669291,
+        "avg_win": 2975.0388425925926,
+        "avg_loss": -4197.421503579952,
+        "worst": -8040.8,
+        "best": 7619.9,
+        "profit_factor": 0.3653842183518953,
+        "max_dd_median": 3568.5,
+        "max_dd_worst": 9844.25,
+        "stop_rate": 0.6519685039370079,
+        "total_pnl": -1116111.22
+      },
+      "Cheap": {
+        "n": 249,
+        "win_rate": 0.42168674698795183,
+        "expectancy": -1180.5453012048195,
+        "avg_win": 2953.6399047619047,
+        "avg_loss": -4195.055347222222,
+        "worst": -9880.93,
+        "best": 6264.39,
+        "profit_factor": 0.5133891178134204,
+        "max_dd_median": 3253.64,
+        "max_dd_worst": 8076.25,
+        "stop_rate": 0.5542168674698795,
+        "total_pnl": -293955.78
+      }
+    },
+    "condor": {
+      "Rich": {
+        "n": 960,
+        "win_rate": 0.6770833333333334,
+        "expectancy": -605.60165625,
+        "avg_win": 1158.3915846153845,
+        "avg_loss": -4304.297161290323,
+        "worst": -7978.76,
+        "best": 11201.43,
+        "profit_factor": 0.5642931911134688,
+        "max_dd_median": 1305.35,
+        "max_dd_worst": 7601.75,
+        "stop_rate": 0.29791666666666666,
+        "total_pnl": -581377.59
+      },
+      "Fair": {
+        "n": 624,
+        "win_rate": 0.6746794871794872,
+        "expectancy": -561.5929166666666,
+        "avg_win": 1136.482897862233,
+        "avg_loss": -4083.2181280788177,
+        "worst": -9072.23,
+        "best": 4845.44,
+        "profit_factor": 0.5772266605901305,
+        "max_dd_median": 1466.8400000000001,
+        "max_dd_worst": 8999.25,
+        "stop_rate": 0.30288461538461536,
+        "total_pnl": -350433.98
+      },
+      "Cheap": {
+        "n": 246,
+        "win_rate": 0.6747967479674797,
+        "expectancy": -503.90841463414625,
+        "avg_win": 1121.621325301205,
+        "avg_loss": -3876.8826249999997,
+        "worst": -7178.34,
+        "best": 3198.25,
+        "profit_factor": 0.6003184710808727,
+        "max_dd_median": 1436.5,
+        "max_dd_worst": 6776.25,
+        "stop_rate": 0.2804878048780488,
+        "total_pnl": -123961.46999999997
+      }
+    },
+    "condor_pts": {
+      "Rich": {
+        "n": 977,
+        "win_rate": 0.42374616171954965,
+        "expectancy": -1016.132722620266,
+        "avg_win": 1570.6571014492754,
+        "avg_loss": -2918.3192007104794,
+        "worst": -10256.24,
+        "best": 5104.61,
+        "profit_factor": 0.39576787219870496,
+        "max_dd_median": 1553.65,
+        "max_dd_worst": 7447.12,
+        "stop_rate": 0.5598771750255885,
+        "total_pnl": -992761.6699999999
+      },
+      "Fair": {
+        "n": 629,
+        "win_rate": 0.3799682034976153,
+        "expectancy": -1112.706963434022,
+        "avg_win": 1495.0051882845187,
+        "avg_loss": -2710.7664615384615,
+        "worst": -7874.14,
+        "best": 3957.58,
+        "profit_factor": 0.3379744655811794,
+        "max_dd_median": 1550.25,
+        "max_dd_worst": 7153.48,
+        "stop_rate": 0.6057233704292527,
+        "total_pnl": -699892.6799999999
+      },
+      "Cheap": {
+        "n": 249,
+        "win_rate": 0.40562248995983935,
+        "expectancy": -1026.8327710843373,
+        "avg_win": 1482.8630693069304,
+        "avg_loss": -2739.5306081081085,
+        "worst": -5782.45,
+        "best": 3965.51,
+        "profit_factor": 0.3693895035727292,
+        "max_dd_median": 1504.75,
+        "max_dd_worst": 5671.25,
+        "stop_rate": 0.5461847389558233,
+        "total_pnl": -255681.36
+      }
+    },
+    "condor_range": {
+      "Rich": {
+        "n": 659,
+        "win_rate": 0.6767830045523521,
+        "expectancy": -743.6283459787558,
+        "avg_win": 967.8529820627803,
+        "avg_loss": -4327.293474178404,
+        "worst": -7994.29,
+        "best": 11133.35,
+        "profit_factor": 0.4683260311547348,
+        "max_dd_median": 1251.25,
+        "max_dd_worst": 7452.25,
+        "stop_rate": 0.2822458270106222,
+        "total_pnl": -490051.08
+      },
+      "Fair": {
+        "n": 425,
+        "win_rate": 0.6847058823529412,
+        "expectancy": -741.4326352941176,
+        "avg_win": 902.8075257731958,
+        "avg_loss": -4312.1332835820895,
+        "worst": -11533.56,
+        "best": 1965.49,
+        "profit_factor": 0.4546646458502221,
+        "max_dd_median": 1325.16,
+        "max_dd_worst": 9514.34,
+        "stop_rate": 0.2776470588235294,
+        "total_pnl": -315108.87
+      },
+      "Cheap": {
+        "n": 129,
+        "win_rate": 0.627906976744186,
+        "expectancy": -799.312945736434,
+        "avg_win": 765.1471604938272,
+        "avg_loss": -3439.339375,
+        "worst": -6707.31,
+        "best": 1989.32,
+        "profit_factor": 0.37541681484495354,
+        "max_dd_median": 1540.5,
+        "max_dd_worst": 5437.25,
+        "stop_rate": 0.24806201550387597,
+        "total_pnl": -103111.37
+      }
+    }
+  }
+}
