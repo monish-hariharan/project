@@ -1,5 +1,5 @@
 {
-  "generated": "2026-10-10T01:53:54",
+  "generated": "2026-10-10T02:04:15",
   "period": "2020-08-03 to 2026-10-06",
   "fills": [
     "ltp+slippage"
@@ -13,8 +13,8 @@
     "report_lot": 65
   },
   "pnl_basis": "\u20b9 per lot of 65 (P&L scaled from each trade's actual lot size)",
-  "trades_total": 1142,
-  "excluded_low_coverage": 96,
+  "trades_total": 629,
+  "excluded_low_coverage": 42,
   "dropped": {
     "no expiry data": 0,
     "legs never priced": 0
@@ -47,6 +47,34 @@
       "max_dd_worst": 18502.25,
       "stop_rate": 0.660958904109589,
       "total_pnl": -502272.77
+    },
+    "condor": {
+      "n": 4,
+      "win_rate": 1.0,
+      "expectancy": 238.09749999999997,
+      "avg_win": 238.09749999999997,
+      "avg_loss": 0.0,
+      "worst": 189.57,
+      "best": 286.63,
+      "profit_factor": null,
+      "max_dd_median": 598.425,
+      "max_dd_worst": 1228.5,
+      "stop_rate": 0.0,
+      "total_pnl": 952.3899999999999
+    },
+    "condor_range": {
+      "n": 1,
+      "win_rate": 0.0,
+      "expectancy": -10.45,
+      "avg_win": 0.0,
+      "avg_loss": -10.45,
+      "worst": -10.45,
+      "best": -10.45,
+      "profit_factor": 0.0,
+      "max_dd_median": 620.75,
+      "max_dd_worst": 620.75,
+      "stop_rate": 0.0,
+      "total_pnl": -10.45
     }
   },
   "by_regime": {
@@ -137,6 +165,55 @@
         "stop_rate": 0.6862745098039216,
         "total_pnl": -297445.72
       }
+    },
+    "condor": {
+      "Range": {
+        "n": 2,
+        "win_rate": 1.0,
+        "expectancy": 286.04499999999996,
+        "avg_win": 286.04499999999996,
+        "avg_loss": 0.0,
+        "worst": 285.46,
+        "best": 286.63,
+        "profit_factor": null,
+        "max_dd_median": 703.625,
+        "max_dd_worst": 1228.5,
+        "stop_rate": 0.0,
+        "total_pnl": 572.0899999999999
+      },
+      "Trend": null,
+      "Mixed": {
+        "n": 2,
+        "win_rate": 1.0,
+        "expectancy": 190.14999999999998,
+        "avg_win": 190.14999999999998,
+        "avg_loss": 0.0,
+        "worst": 189.57,
+        "best": 190.73,
+        "profit_factor": null,
+        "max_dd_median": 598.425,
+        "max_dd_worst": 884.85,
+        "stop_rate": 0.0,
+        "total_pnl": 380.29999999999995
+      }
+    },
+    "condor_range": {
+      "Range": {
+        "n": 1,
+        "win_rate": 0.0,
+        "expectancy": -10.45,
+        "avg_win": 0.0,
+        "avg_loss": -10.45,
+        "worst": -10.45,
+        "best": -10.45,
+        "profit_factor": 0.0,
+        "max_dd_median": 620.75,
+        "max_dd_worst": 620.75,
+        "stop_rate": 0.0,
+        "total_pnl": -10.45
+      },
+      "Trend": null,
+      "Mixed": null
     }
   },
   "by_vol_edge": {
@@ -227,11 +304,57 @@
         "stop_rate": 0.6842105263157895,
         "total_pnl": -35750.75
       }
+    },
+    "condor": {
+      "Rich": {
+        "n": 3,
+        "win_rate": 1.0,
+        "expectancy": 222.30999999999997,
+        "avg_win": 222.30999999999997,
+        "avg_loss": 0.0,
+        "worst": 189.57,
+        "best": 286.63,
+        "profit_factor": null,
+        "max_dd_median": 884.85,
+        "max_dd_worst": 1228.5,
+        "stop_rate": 0.0,
+        "total_pnl": 666.93
+      },
+      "Fair": {
+        "n": 1,
+        "win_rate": 1.0,
+        "expectancy": 285.46,
+        "avg_win": 285.46,
+        "avg_loss": 0.0,
+        "worst": 285.46,
+        "best": 285.46,
+        "profit_factor": null,
+        "max_dd_median": 178.75,
+        "max_dd_worst": 178.75,
+        "stop_rate": 0.0,
+        "total_pnl": 285.46
+      },
+      "Cheap": null
+    },
+    "condor_range": {
+      "Rich": {
+        "n": 1,
+        "win_rate": 0.0,
+        "expectancy": -10.45,
+        "avg_win": 0.0,
+        "avg_loss": -10.45,
+        "worst": -10.45,
+        "best": -10.45,
+        "profit_factor": 0.0,
+        "max_dd_median": 620.75,
+        "max_dd_worst": 620.75,
+        "stop_rate": 0.0,
+        "total_pnl": -10.45
+      },
+      "Fair": null,
+      "Cheap": null
     }
   },
-  "excluded_families": {
-    "condor": "invalid in v2 (degenerate wings); rerun with nifty_backtest.py v3",
-    "condor_range": "invalid in v2 (degenerate wings); rerun with nifty_backtest.py v3"
-  },
-  "source_run": "backtest/v2"
+  "source_run": "backtest/v3",
+  "notes": "Condor families have too few trades (data rarely has far-OTM wing strikes near 09:25); below min_history_trades they are not used."
 }
