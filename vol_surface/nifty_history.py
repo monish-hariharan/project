@@ -124,14 +124,19 @@ def load_backtest(path=None):
     return json.loads(path.read_text())
 
 
-def history(backtest, paper, min_trades=20):
-    """Per family: prefer the backtest when it has at least `min_trades`, else the forward record."""
+def history(backtest, paper, min_trades=20, regime=None):
+    """Per family: the backtest record for today's regime if it has `min_trades`, else the family's
+    overall backtest record, else the forward record."""
     out = {}
     fams = set((backtest or {}).get("families", {})) | set(paper)
+    period = (backtest or {}).get("period", "")
     for f in fams:
         bt = (backtest or {}).get("families", {}).get(f)
-        if bt:
-            bt = dict(bt, source=f"backtest {backtest.get('period', '')}".strip())
+        by_reg = ((backtest or {}).get("by_regime", {}).get(f) or {}).get(regime) if regime else None
+        if by_reg and by_reg.get("n", 0) >= min_trades:
+            bt = dict(by_reg, source=f"backtest {period}, {regime} regime".strip())
+        elif bt:
+            bt = dict(bt, source=f"backtest {period}".strip())
         pp = paper.get(f)
         pick = bt if bt and bt.get("n", 0) >= min_trades else pp if pp and pp["n"] >= min_trades else None
         out[f] = pick

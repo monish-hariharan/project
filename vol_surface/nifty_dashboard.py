@@ -222,11 +222,11 @@ def main():
     paper_path = Path(a.log_dir) / "paper.json"
     paper_book = _json.loads(paper_path.read_text()) if paper_path.exists() else {}
     backtest = load_backtest(a.backtest)
-    hist = hist_merge(backtest, paper_stats(paper_book), rules.get("min_history_trades", 20))
-    rank(ideas, costs, hist)
     edge = eng.vol_edge(target["atm_iv"], vf["forecast"], rules)
     prev_day = dict(high=float(nifty["high"][-1]), low=float(nifty["low"][-1]))
     reg = eng.regime(S, prev_day, vf, Z, rules)
+    hist = hist_merge(backtest, paper_stats(paper_book), rules.get("min_history_trades", 20), reg["label"])
+    rank(ideas, costs, hist)
     gex = eng.gex_profile(table, S)
     pm_front = eng.pcr_maxpain(table, summary[0]["expiry"])
     pm_target = eng.pcr_maxpain(table, target["expiry"])

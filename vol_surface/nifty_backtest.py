@@ -139,7 +139,8 @@ class Store:
 
     def day(self, d):
         if d not in self._cache:
-            self._cache = {d: pd.read_parquet(self.path / f"date={d}")}     # keep one day in memory
+            df = pd.read_parquet(self.path / f"date={d}").sort_values("timestamp", kind="stable")
+            self._cache = {d: df.reset_index(drop=True)}                    # keep one day in memory
         return self._cache[d]
 
 
@@ -149,9 +150,26 @@ def _mid(r, has_ba):
     return r.get("ltp")
 
 
-def _snapshot(df, t):
-    snap = df[df["timestamp"] == t]
+def _snapshot(df, t, stale_min=0):
+    """Last traded row per contract at time t, looking back up to `stale_min` minutes."""
+    ts = df["timestamp"]
+    t = pd.Timestamp(t)
+    snap = df[(ts <= t) & (ts > t - pd.Timedelta(minutes=stale_min))] if stale_min else df[ts == t]
+    snap = snap.drop_duplicates(["expiry", "strike", "type"], keep="last")
     return {(row.expiry, float(row.strike), row.type): row._asdict() for row in snap.itertuples(index=False)}
+
+
+def _spot_at(df, t, has_ba):
+    """Underlying at or before t from any row of the day (falls back to parity on the nearest expiry)."""
+    sub = df[df["timestamp"] <= pd.Timestamp(t)]
+    if "underlying" in sub.columns:
+        u = sub["underlying"].dropna()
+        u = u[u > 0]
+        if len(u):
+            return float(u.iloc[-1])
+    snap = _snapshot(df, t, 30)
+    exps = sorted({e for (e, _, _) in snap})
+    return _spot(snap, exps[0], has_ba) if exps else None
 
 
 def _spot(snap, expiry, has_ba):
@@ -252,12 +270,22 @@ def daily_bars(store):
     return bars
 
 
-def lot_size(d, cfg):
-    sched = sorted(cfg.get("lot_size_schedule", [["1900-01-01", 65]]))
+def lot_size(d, cfg, expiry=None):
+    """Lot size for a contract traded on `d` expiring on `expiry`.
+
+    lot_size_by_expiry {expiry: lot} overrides everything. Schedule entries are
+    [start, lot] (applies to trades on/after start) or [start, lot, "expiry"] (applies to
+    contracts expiring on/after start); the latest applicable entry wins.
+    """
+    over = cfg.get("lot_size_by_expiry", {})
+    if expiry and expiry in over:
+        return over[expiry]
+    sched = sorted(cfg.get("lot_size_schedule", [["1900-01-01", 65]]), key=lambda e: e[0])
     size = sched[0][1]
-    for start, s in sched:
-        if d >= start:
-            size = s
+    for e in sched:
+        by_expiry = len(e) > 2 and e[2] == "expiry"
+        if (by_expiry and expiry and expiry >= e[0]) or (not by_expiry and d >= e[0]):
+            size = e[1]
     return size
 
 
@@ -281,7 +309,8 @@ def run(cfg, store_path, out_dir):
     entry_t = cfg.get("entry_time", "09:25")
     every = int(cfg.get("entry_every_n_days", 5))
     check = int(cfg.get("check_every_minutes", 15))
-    trades = []
+    stale = int(cfg.get("max_stale_minutes", 30))
+    trades, dropped = [], {"no expiry data": 0, "legs never priced": 0}
     for di, d in enumerate(store.dates):
         if di % every or d not in bar_by or bar_by[d] < 25:
             continue
@@ -291,12 +320,12 @@ def run(cfg, store_path, out_dir):
         t0 = next((t for t in times if pd.Timestamp(t).strftime("%H:%M") >= entry_t), None)
         if t0 is None:
             continue
-        snap = _snapshot(df, t0)
+        snap = _snapshot(df, t0, stale)
         exps = sorted({e for (e, _, _) in snap if e > d})
         exp = next((e for e in exps if (pd.Timestamp(e) - pd.Timestamp(d)).days >= rules["min_days"]), None)
         if not exp:
             continue
-        S = _spot(snap, exp, has_ba) or _spot(snap, exps[0], has_ba)
+        S = _spot_at(df, t0, has_ba) or _spot(snap, exp, has_ba)
         if not S:
             continue
         T = ((pd.Timestamp(exp) + pd.Timedelta(hours=15, minutes=30)) - pd.Timestamp(t0)).total_seconds() / 31_536_000
@@ -311,7 +340,7 @@ def run(cfg, store_path, out_dir):
         E = eng.expected_move(prev["close"], v_prev) if v_prev else prev["close"] * vfc["forecast"] / math.sqrt(252)
         z = (S - prev["close"]) / E
         reg = eng.regime(S, prev, vfc, z, rules)
-        lot = lot_size(d, cfg)
+        lot = lot_size(d, cfg, exp)
         for fam, legs in build(snap, exp, F, T, rules, vix.get(prev["date"]), has_ba).items():
             entry, src = [], None
             for k, t, n in legs:
@@ -321,20 +350,24 @@ def run(cfg, store_path, out_dir):
             idea = dict(legs=[dict(l) for l in entry], net=net, eval={"cost": 0.0})
             plan = exit_plan(idea, rules, pd.Timestamp(d).date())
             entry_cost = sum(charges(l["price"], l["lots"], l["lots"] > 0, c, lot) for l in entry)
-            res = replay(store, entry, plan, net, d, t0, check, has_ba, c, lot, rules)
-            if res is None:
+            res = replay(store, entry, plan, net, d, t0, check, has_ba, c, lot, rules, stale)
+            if isinstance(res, str):
+                dropped[res] += 1
                 continue
             pnl = res["pnl_gross"] - entry_cost - res["exit_cost"]
+            scale = cfg.get("report_lot", 65) / lot
             trades.append(dict(date=d, time=pd.Timestamp(t0).strftime("%H:%M"), family=fam, expiry=exp,
                                spot=round(S, 2), regime=reg["label"], z=round(z, 3),
                                vol_edge=_edge_label(snap, exp, S, T, vfc, has_ba, rules),
                                legs="; ".join(f"{l['lots']:+d} {l['strike']:.0f}{l['type']} @ {l['price']:.2f}"
                                               for l in entry),
                                entry_net=round(net, 2), exit_reason=res["reason"], exit_time=res["t"],
-                               pnl=round(pnl, 2), max_dd=round(res["max_dd"], 2), fills=src,
+                               pnl_actual=round(pnl, 2), pnl_points=round(pnl / lot, 3),
+                               pnl=round(pnl * scale, 2), max_dd=round(res["max_dd"] * scale, 2),
+                               coverage=round(res["coverage"], 3), checks=res["checks"], fills=src,
                                costs=round(entry_cost + res["exit_cost"], 2), lot_size=lot))
         print(f"{d}: {len(trades)} trades so far", end="\r")
-    write_outputs(trades, store, out_dir, cfg)
+    write_outputs(trades, store, out_dir, cfg, dropped)
 
 
 def _edge_label(snap, exp, S, T, vfc, has_ba, rules):
@@ -353,17 +386,26 @@ def _edge_label(snap, exp, S, T, vfc, has_ba, rules):
     return __import__("nifty_engine").vol_edge(float(np.mean(ivs)), vfc["forecast"], rules)["label"]
 
 
-def replay(store, legs, plan, net, d0, t0, check, has_ba, c, lot, rules):
-    """Walk forward through real snapshots; return P&L before charges, exit costs and drawdown."""
+def replay(store, legs, plan, net, d0, t0, check, has_ba, c, lot, rules, stale):
+    """Walk forward through real snapshots until an exit rule fires or the contract expires.
+
+    Each leg keeps its last traded price, so the position is checked at every snapshot once
+    all legs have traded since entry (coverage = share of checks where every leg traded within
+    `stale` minutes). If no rule fires, the trade settles at intrinsic value using the real
+    spot on expiry day; without expiry-day data the trade is dropped, never assumed.
+    Returns a dict, or a string naming why the trade was dropped.
+    """
     exp = legs[0]["expiry"]
-    series, last_t, reason, exit_px, last_S = [0.0], None, None, None, None
+    keys = [(exp, l["strike"], l["type"]) for l in legs]
+    last = dict.fromkeys(keys)
+    series, reason, exit_rows, exit_t, checks, fresh = [0.0], None, None, None, 0, 0
     i0 = store.dates.index(d0)
     for d in store.dates[i0:]:
         if d > exp:
             break
-        df = store.day(d)
-        df = df[df["expiry"] == exp]
-        times = sorted(df["timestamp"].unique())
+        day = store.day(d)
+        dfe = day[day["expiry"] == exp]
+        times = sorted(day["timestamp"].unique())
         step = [t for t in times if pd.Timestamp(t) > pd.Timestamp(t0)]
         if check > 1 and step:
             keep, nxt = [], None
@@ -373,19 +415,21 @@ def replay(store, legs, plan, net, d0, t0, check, has_ba, c, lot, rules):
                     nxt = pd.Timestamp(t) + pd.Timedelta(minutes=check)
             step = keep + ([step[-1]] if step[-1] not in keep else [])
         for t in step:
-            snap = _snapshot(df, t)
-            rows = [snap.get((exp, l["strike"], l["type"])) for l in legs]
-            if any(r is None for r in rows):
+            snap = _snapshot(dfe, t, stale)
+            got = [snap.get(k) for k in keys]
+            for k, r in zip(keys, got):
+                if r is not None:
+                    last[k] = r
+            if any(last[k] is None for k in keys):
                 continue
-            marks = [_mid(r, has_ba) for r in rows]
+            marks = [_mid(last[k], has_ba) for k in keys]
             if any(m is None for m in marks):
                 continue
+            checks += 1
+            fresh += all(r is not None for r in got)
             value = sum(l["lots"] * m for l, m in zip(legs, marks)) * lot
-            pnl = net + value
-            series.append(pnl)
-            last_t = t
-            S = _spot(snap, exp, has_ba)
-            last_S = S or last_S
+            series.append(net + value)
+            S = _spot_at(day, t, has_ba)
             if plan["kind"] == "credit":
                 if -value <= plan["tp_close_cost"]:
                     reason = "take profit"
@@ -399,29 +443,36 @@ def replay(store, legs, plan, net, d0, t0, check, has_ba, c, lot, rules):
             for K, typ in plan.get("short_strikes", []):
                 if S and ((typ == "CE" and S >= K) or (typ == "PE" and S <= K)):
                     reason = reason or "stop loss (short strike breached)"
-            if reason is None and d >= plan["exit_date"] and pd.Timestamp(t).strftime("%H:%M") >= "15:15":
+            if reason is None and d >= plan["exit_date"] and (
+                    pd.Timestamp(t).strftime("%H:%M") >= "15:15" or t == step[-1]):
                 reason = "exit date"
             if reason:
-                exit_px = [fill(r, -l["lots"], -l["lots"], has_ba, c)[0] for l, r in zip(legs, rows)]
+                exit_rows, exit_t = [last[k] for k in keys], t
                 break
         if reason:
             break
-    if last_t is None:
-        return None
-    if exit_px is not None:
+    if checks == 0:
+        return "legs never priced"
+    if exit_rows is not None:
+        exit_px = [fill(r, -l["lots"], -l["lots"], has_ba, c)[0] for l, r in zip(legs, exit_rows)]
         gross = net + sum(l["lots"] * p for l, p in zip(legs, exit_px)) * lot
         ex_cost = sum(charges(p, l["lots"], l["lots"] < 0, c, lot) for l, p in zip(legs, exit_px))
-    else:                                       # held to expiry: settle at intrinsic, STT on exercise
-        reason = "expiry"
-        S = last_S
+    else:                                       # held to expiry: real expiry-day spot, STT on exercise
+        if exp not in store.dates:
+            return "no expiry data"
+        eday = store.day(exp)
+        S = _spot_at(eday, eday["timestamp"].max(), has_ba)
+        if not S:
+            return "no expiry data"
+        reason, exit_t = "expiry", eday["timestamp"].max()
         intr = [max(S - l["strike"], 0) if l["type"] == "CE" else max(l["strike"] - S, 0) for l in legs]
         gross = net + sum(l["lots"] * v for l, v in zip(legs, intr)) * lot
         ex_cost = sum(c.get("stt_exercise_pct", 0) / 100 * v * l["lots"] * lot
                       for l, v in zip(legs, intr) if l["lots"] > 0)
         series.append(gross)
     peak = np.maximum.accumulate(series)
-    return dict(pnl_gross=gross, exit_cost=ex_cost, reason=reason,
-                t=str(last_t), max_dd=float((peak - np.array(series)).max()))
+    return dict(pnl_gross=gross, exit_cost=ex_cost, reason=reason, t=str(exit_t), checks=checks,
+                coverage=fresh / checks, max_dd=float((peak - np.array(series)).max()))
 
 
 def _stats(rows):
@@ -440,7 +491,7 @@ def _stats(rows):
                 total_pnl=float(p.sum()))
 
 
-def write_outputs(trades, store, out_dir, cfg):
+def write_outputs(trades, store, out_dir, cfg, dropped=None):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     if not trades:
@@ -450,11 +501,18 @@ def write_outputs(trades, store, out_dir, cfg):
         w = csv.DictWriter(f, fieldnames=list(trades[0].keys()))
         w.writeheader()
         w.writerows(trades)
+    min_cov = cfg.get("min_coverage", 0.5)
+    all_trades = trades
+    trades = [t for t in trades if t["coverage"] >= min_cov]
     fams = sorted({t["family"] for t in trades})
     stats = dict(generated=datetime.now().isoformat(timespec="seconds"),
                  period=f"{store.dates[0]} to {store.dates[-1]}",
                  fills=sorted({t["fills"] for t in trades}),
-                 settings={k: cfg.get(k) for k in ("entry_time", "entry_every_n_days", "check_every_minutes")},
+                 settings={k: cfg.get(k) for k in ("entry_time", "entry_every_n_days", "check_every_minutes",
+                                                    "max_stale_minutes", "min_coverage", "report_lot")},
+                 pnl_basis=f"₹ per lot of {cfg.get('report_lot', 65)} (P&L scaled from each trade's actual lot size)",
+                 trades_total=len(all_trades), excluded_low_coverage=len(all_trades) - len(trades),
+                 dropped=dropped or {},
                  families={f: _stats([t for t in trades if t["family"] == f]) for f in fams},
                  by_regime={f: {r: _stats([t for t in trades if t["family"] == f and t["regime"] == r])
                                 for r in ("Range", "Trend", "Mixed")} for f in fams},
