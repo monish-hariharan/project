@@ -204,6 +204,12 @@ def build(snap, expiry, F, T, rules, vix, has_ba):
 
     def near(x):
         return min(strikes, key=lambda k: abs(k - x))
+
+    def beyond(k0, width, direction):
+        """Strike on the far side of k0 (direction -1 = lower, +1 = higher) closest to `width` away,
+        within half to one-and-a-half widths; None if the data has no such traded strike."""
+        cands = [k for k in strikes if (k - k0) * direction > 0 and 0.5 * width <= abs(k - k0) <= 1.5 * width]
+        return min(cands, key=lambda k: abs(abs(k - k0) - width)) if cands else None
     deltas = {}
     for k in strikes:
         for t in ("CE", "PE"):
@@ -217,17 +223,22 @@ def build(snap, expiry, F, T, rules, vix, has_ba):
     out = {}
     puts = [(abs(abs(v) - d), k) for (k, t), v in deltas.items() if t == "PE" and k < F]
     calls = [(abs(v - d), k) for (k, t), v in deltas.items() if t == "CE" and k > F]
+    def condor(sp, sc):
+        lp, lc = beyond(sp, w, -1), beyond(sc, w, +1)
+        if lp is None or lc is None or not (sp < F < sc):
+            return None
+        return [(lp, "PE", 1), (sp, "PE", -1), (sc, "CE", -1), (lc, "CE", 1)]
     if puts and calls:
-        sp, sc = min(puts)[1], min(calls)[1]
-        out["condor"] = [(near(sp - w), "PE", 1), (sp, "PE", -1), (sc, "CE", -1), (near(sc + w), "CE", 1)]
+        out["condor"] = condor(min(puts)[1], min(calls)[1])
     if vix:
         tdays = max(T * 252, 1)                     # ≈ trading days to expiry
         E = F * vix / 100 * math.sqrt(tdays / 252)
-        sp, sc = near(F - E), near(F + E)
-        out["condor_range"] = [(near(sp - w), "PE", 1), (sp, "PE", -1), (sc, "CE", -1), (near(sc + w), "CE", 1)]
+        out["condor_range"] = condor(near(F - E), near(F + E))
     atm = near(F)
-    out["bull"] = [(atm, "CE", 1), (near(atm + dw), "CE", -1)]
-    out["bear"] = [(atm, "PE", 1), (near(atm - dw), "PE", -1)]
+    hi, lo = beyond(atm, dw, +1), beyond(atm, dw, -1)
+    out["bull"] = [(atm, "CE", 1), (hi, "CE", -1)] if hi else None
+    out["bear"] = [(atm, "PE", 1), (lo, "PE", -1)] if lo else None
+    out = {f: legs for f, legs in out.items() if legs and len({(k, t) for k, t, _ in legs}) == len(legs)}
     return {f: legs for f, legs in out.items() if all(q(k, t) for k, t, _ in legs)}
 
 
@@ -320,7 +331,7 @@ def run(cfg, store_path, out_dir):
         t0 = next((t for t in times if pd.Timestamp(t).strftime("%H:%M") >= entry_t), None)
         if t0 is None:
             continue
-        snap = _snapshot(df, t0, stale)
+        snap = _snapshot(df, t0, int(cfg.get("entry_max_stale_minutes", 60)))
         exps = sorted({e for (e, _, _) in snap if e > d})
         exp = next((e for e in exps if (pd.Timestamp(e) - pd.Timestamp(d)).days >= rules["min_days"]), None)
         if not exp:
@@ -520,10 +531,10 @@ def write_outputs(trades, store, out_dir, cfg, dropped=None):
                                   for v in ("Rich", "Fair", "Cheap")} for f in fams})
     # the dashboard's "condor" family uses the delta-based condor; keep the range one separately
     (out_dir / "backtest_stats.json").write_text(json.dumps(stats, indent=2))
-    print(f"\n{len(trades)} trades → {out_dir / 'backtest_stats.json'} and backtest_trades.csv")
+    print(f"\n{len(trades)} trades -> {out_dir / 'backtest_stats.json'} and backtest_trades.csv")
     for f, s in stats["families"].items():
-        print(f"  {f:13s} n={s['n']:4d} win {s['win_rate']*100:5.1f}%  expectancy ₹{s['expectancy']:9,.0f}"
-              f"  worst ₹{s['worst']:10,.0f}  max DD median ₹{s['max_dd_median']:8,.0f}  stop {s['stop_rate']*100:4.1f}%")
+        print(f"  {f:13s} n={s['n']:4d} win {s['win_rate']*100:5.1f}%  expectancy Rs{s['expectancy']:9,.0f}"
+              f"  worst Rs{s['worst']:10,.0f}  max DD median Rs{s['max_dd_median']:8,.0f}  stop {s['stop_rate']*100:4.1f}%")
 
 
 def main():
