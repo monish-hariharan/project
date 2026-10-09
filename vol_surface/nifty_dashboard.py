@@ -25,8 +25,9 @@ import numpy as np
 from scipy.stats import norm
 
 from nifty_costs import load_costs, rank
-from nifty_risk import exit_plan, load_rules, position_alerts
-from nifty_strategies import analyse_positions, load_positions, scenario_pnl, suggest
+from nifty_risk import exit_plan, load_rules
+from nifty_strategies import load_positions, suggest
+from nifty_tracker import LOG_DIR, log_suggestions, match_positions, monitor, read_suggestions
 from nifty_vol_surface import (IST, black76, build_grid, chain_points, load_csv,
                                time_to_expiry)
 
@@ -80,6 +81,47 @@ def realised(o, h, l, c):
     return ret, out
 
 
+# ------------------------------------------------------------------------ table
+
+def make_table(chains, points, S, rate):
+    """Per-strike rows: IV from the OTM quote, prices, OI (lots) and Greeks for call and put."""
+    iv_at = {(p.expiry, p.strike): p for p in points}
+    table = []
+    for e in sorted(chains):
+        oc = chains[e]["oc"]
+        for ks in sorted(oc, key=float):
+            K = float(ks)
+            p = iv_at.get((e, K))
+            if p is None:
+                continue
+            ce, pe = oc[ks]["ce"], oc[ks]["pe"]
+            row = dict(expiry=e, days=p.T * 365, strike=K, forward=p.forward, iv=p.iv,
+                       ce_ltp=ce["last_price"], pe_ltp=pe["last_price"],
+                       ce_oi=ce["oi"] // LOT, pe_oi=pe["oi"] // LOT)
+            for side, is_call in (("ce", True), ("pe", False)):
+                d, g, t, v = greeks(S, p.forward, K, p.T, p.iv, rate, is_call)
+                row.update({f"{side}_delta": d, f"{side}_gamma": g,
+                            f"{side}_theta": t, f"{side}_vega": v})
+            table.append(row)
+    return table
+
+
+def expiry_info(table, S, now):
+    """Light per-expiry facts (forward, ATM IV, straddle move) without needing price history."""
+    out = []
+    for e in sorted({r["expiry"] for r in table}):
+        rows = [r for r in table if r["expiry"] == e]
+        F = rows[0]["forward"]
+        atm = min(rows, key=lambda r: abs(r["strike"] - F))
+        ks = np.array([math.log(r["strike"] / F) for r in rows])
+        straddle = atm["ce_ltp"] + atm["pe_ltp"]
+        out.append(dict(expiry=e, days=rows[0]["days"], forward=F, atm_strike=atm["strike"],
+                        atm_iv=float(np.interp(0.0, ks, [r["iv"] for r in rows])),
+                        straddle=straddle, implied_move=straddle / S,
+                        tdays=max(int(np.busday_count(now.date().isoformat(), e)), 1)))
+    return out
+
+
 # ------------------------------------------------------------------------- main
 
 def main():
@@ -97,7 +139,9 @@ def main():
                     help="broker charges and slippage settings (JSON)")
     ap.add_argument("--rules", default=str(Path(__file__).with_name("rules.json")),
                     help="exit and alert thresholds (JSON)")
-    ap.add_argument("--positions", help="CSV of open positions: expiry,strike,type,lots,entry_price")
+    ap.add_argument("--positions", help="CSV of open positions (expiry,strike,type,lots,entry_price); "
+                                        "only used to detect which logged suggestions you took")
+    ap.add_argument("--log-dir", default=str(LOG_DIR), help="suggestion log and tracked trades")
     a = ap.parse_args()
 
     now = datetime.strptime(a.asof, "%Y-%m-%d %H:%M").replace(tzinfo=IST)
@@ -109,25 +153,7 @@ def main():
     k_grid, T_grid, IV, _, _ = build_grid(points)
     expiries = sorted(chains)
 
-    # ---- per-strike table: IV from the OTM quote, Greeks for both call and put
-    iv_at = {(p.expiry, p.strike): p for p in points}
-    table = []
-    for e in expiries:
-        oc = chains[e]["oc"]
-        for ks in sorted(oc, key=float):
-            K = float(ks)
-            p = iv_at.get((e, K))
-            if p is None:
-                continue
-            ce, pe = oc[ks]["ce"], oc[ks]["pe"]
-            row = dict(expiry=e, days=p.T * 365, strike=K, forward=p.forward, iv=p.iv,
-                       ce_ltp=ce["last_price"], pe_ltp=pe["last_price"],
-                       ce_oi=ce["oi"] // LOT, pe_oi=pe["oi"] // LOT)
-            for side, is_call in (("ce", True), ("pe", False)):
-                d, g, t, v = greeks(S, p.forward, K, p.T, p.iv, a.rate, is_call)
-                row.update({f"{side}_delta": d, f"{side}_gamma": g,
-                            f"{side}_theta": t, f"{side}_vega": v})
-            table.append(row)
+    table = make_table(chains, points, S, a.rate)
 
     # ---- per-expiry summary: ATM IV, straddle, implied vs realised move, liquidity
     d, o, h, l, c = load_daily(a.daily)
@@ -179,29 +205,31 @@ def main():
     rules = load_rules(a.rules)
     for i in ideas:
         i["exit"] = exit_plan(i, rules, now.date())
-    book = None
-    if a.positions:
-        analysed, missing = analyse_positions(load_positions(a.positions), table, S, greeks, a.rate)
-        book = dict(rows=analysed, missing=missing,
-                    scen=scenario_pnl(analysed, S, black76, a.rate) if analysed else [])
-        book["alerts"] = position_alerts(book, table, summary, S, rules, now.date())
+    log_suggestions(ideas, now, S, a.log_dir)
+    started = match_positions(load_positions(a.positions), now, a.log_dir) if a.positions else []
+    tracked = monitor(table, summary, S, now, rules, a.log_dir, only_new=False)
+    log = read_suggestions(a.log_dir)
 
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     tag = now.strftime("%Y-%m-%d")
     write_tables(out, tag, table, summary)
-    extra = extra_sections(ideas, book, best, costs)
+    extra = extra_sections(ideas, tracked, log, best, costs)
     html = write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary,
                            d, c, ret, rv, today, a.page, extra)
     xlsx = write_workbook(out / "download" / f"nifty_dashboard_{tag}.xlsx", now, S, summary,
-                          rv, table, ideas, book, costs)
+                          rv, table, ideas, tracked, log, costs)
     for i in ideas:
         e = i["eval"]
         print(f"{'BEST ' if i['best'] else '     '}[{i['fit']}] {i['name']} {i['expiry']}: "
               f"net ₹{i['net']:,.0f}, costs ₹{e['cost']:,.0f}, EV ₹{e['ev']:,.0f} "
               f"(EV/risk {e['ev_on_risk']*100:+.1f}%, POP {e['pop']*100:.0f}%)")
-    for al in (book or {}).get("alerts", []):
-        print(f"ALERT [{al['level']}] {al['kind']}: {al['msg']}")
+    for t in started:
+        print(f"Now tracking {t['id']} {t['name']} ×{t['multiplier']} (found in your positions)")
+    for t, snap, alerts, _ in tracked:
+        print(f"TRACKED {t['id']} {t['name']} ×{t['multiplier']}: P&L ₹{snap['pnl']:,.0f}")
+        for al in alerts:
+            print(f"  ALERT [{al['level']}] {al['kind']}: {al['msg']}")
     print(f"Workbook: {xlsx.resolve()}")
     print_report(summary, rv, today)
     print(f"\nDashboard: {html.resolve()}")
@@ -221,7 +249,7 @@ def _rs(v):
     return f"−₹{-v:,.0f}" if v < 0 else f"₹{v:,.0f}"
 
 
-def extra_sections(ideas, book, best, c):
+def extra_sections(ideas, tracked, log, best, c):
     cls = {"Favoured": "good", "Neutral": "warn", "Not favoured": "bad"}
     cards = []
     for i in ideas:
@@ -252,6 +280,7 @@ def extra_sections(ideas, book, best, c):
                    + f" · 5% worst case {_rs(e['p5'])}</p>")
         cards.append(f"""<article class="idea">
 <header>{badge}<span class="pill {cls[i['fit']]}">{i['fit']}</span><h3>{i['name']}</h3>
+<span class="muted id">{i.get('id', '')}</span>
 <span class="muted">{i['expiry']} · {i['view']}</span></header>
 <ul>{''.join(f'<li>{r}</li>' for r in i['reasons'])}</ul>
 <div class="wrap"><table><tr><th>Leg</th><th>Expiry</th><th>Strike</th><th>LTP</th><th>OI (lots)</th></tr>{legs}</table></div>
@@ -292,47 +321,65 @@ After costs: max profit {_rs(mp)} · max loss {_rs(ml)} · breakeven {be}<br>
             'the 5-day column shows the same with recent, higher vol. Prices are last trades, not quotes; '
             'margin and events are not modelled. These are ideas to check, not advice.</p>'
             f'<div class="ideas">{"".join(cards)}</div></section>')
-    if book is None:
-        html += ('<section><h2>Your positions</h2><p class="notes">No positions supplied. '
-                 'Reply with your open NIFTY option positions (expiry, strike, CE/PE, lots, '
-                 'entry price) and the next dashboard will show their Greeks, P&amp;L and '
-                 'spot-shock scenarios.</p></section>')
-        return html
-    rows = "".join(
-        f"<tr><td>{p['expiry']}</td><td>{p['strike']:.0f} {p['type']}</td><td>{p['lots']:+g}</td>"
-        f"<td>{p['entry']:.2f}</td><td>{_px(p['ltp'])}</td>"
-        f"<td>{_rs(p['pnl'])}</td><td>{p['iv']*100:.1f}%</td><td>{p['delta']:+.1f}</td>"
-        f"<td>{p['gamma']:+.3f}</td><td>{_rs(p['theta'])}</td><td>{_rs(p['vega'])}</td></tr>"
-        for p in book["rows"])
-    tot = {k: sum(p[k] for p in book["rows"]) for k in ("delta", "gamma", "theta", "vega")}
-    pnl = sum(p["pnl"] or 0 for p in book["rows"])
-    rows += (f"<tr class='total'><td>Total</td><td></td><td></td><td></td><td></td><td>{_rs(pnl)}</td>"
-             f"<td></td><td>{tot['delta']:+.1f}</td><td>{tot['gamma']:+.3f}</td>"
-             f"<td>{_rs(tot['theta'])}</td><td>{_rs(tot['vega'])}</td></tr>")
-    scen = "".join(f"<td>{m*100:+.0f}%<br><span class='muted'>{s:,.0f}</span></td>" for m, s, _ in book["scen"])
-    scen_v = "".join(f"<td class='{'up' if v >= 0 else 'down'}'>{_rs(v)}</td>" for *_, v in book["scen"])
-    miss = ""
-    if book["missing"]:
-        miss = ("<p class='notes'>Not priced (expiry not in today's chain): " +
-                ", ".join(f"{m['expiry']} {m['strike']:.0f} {m['type']}" for m in book["missing"]) + "</p>")
     lv = {"action": "bad", "warn": "warn", "info": "good"}
-    al = book.get("alerts", [])
-    alerts_html = ("<ul class='alerts'>" + "".join(
-        f"<li class='{lv[a['level']]}'><span class='pill {lv[a['level']]}'>{a['kind']}</span> {a['msg']}</li>"
-        for a in al) + "</ul>") if al else "<p class='notes'>No alerts: no stops, hedges, recentres or rolls needed today.</p>"
-    html += f"""<section><h2>Your positions</h2>
-<h3>Alerts</h3>{alerts_html}
-<div class="wrap"><table><tr><th>Expiry</th><th>Option</th><th>Lots</th><th>Entry</th><th>LTP</th>
-<th>P&amp;L</th><th>IV</th><th>Δ (units)</th><th>Γ</th><th>Θ/day</th><th>Vega/pt</th></tr>{rows}</table></div>
-<h3>Spot shock, IV unchanged</h3><div class="wrap"><table><tr><th>Move</th>{scen}</tr><tr><td>P&amp;L</td>{scen_v}</tr></table></div>{miss}</section>"""
+    blocks = []
+    for t, snap, alerts, _ in tracked:
+        legs = "".join(
+            f"<tr><td>{'Buy' if l['lots'] > 0 else 'Sell'} {abs(l['lots']):g}</td><td>{l['expiry']}</td>"
+            f"<td>{l['strike']:.0f} {l['type']}</td><td>{l['entry']:.2f}</td><td>{_px(l.get('ltp'))}</td></tr>"
+            for l in [dict(l, ltp=_ltp_now(l, snap)) for l in t["legs"]])
+        al = ("<ul class='alerts'>" + "".join(
+            f"<li class='{lv[a['level']]}'><span class='pill {lv[a['level']]}'>{a['kind']}</span> {a['msg']}</li>"
+            for a in alerts) + "</ul>") if alerts else "<p class='notes'>Inside its exit plan: no action needed.</p>"
+        x = t["exit"]
+        blocks.append(f"""<article class="idea"><header><h3>{t['name']} ×{t['multiplier']}</h3>
+<span class="muted id">{t['id']} · taken {t['taken']} ({t['source']})</span></header>
+<p class="figs {'up' if snap['pnl'] >= 0 else 'down'}">P&amp;L {_rs(snap['pnl'])} · entry {'credit' if t['entry_net'] > 0 else 'debit'} {_rs(abs(t['entry_net']))}
+· net Δ {snap['delta']:+.0f} · checked {snap['time']} at spot {snap['spot']:,.2f}</p>
+{al}<div class="wrap"><table><tr><th>Leg</th><th>Expiry</th><th>Strike</th><th>Entry</th><th>Now</th></tr>{legs}</table></div>
+<p class="figs">{_levels(t)}</p></article>""")
+    tracked_html = ("<div class='ideas'>" + "".join(blocks) + "</div>") if blocks else (
+        "<p class='notes'>None of the logged suggestions is being tracked. When you enter one, it is "
+        "picked up from your positions automatically, or tell me its ID (for example "
+        f"{ideas[0].get('id', 'S20261009-1') if ideas else 'S20261009-1'}) and your fill prices.</p>")
+    taken = {t["id"] for t, *_ in tracked}
+    recent = sorted(log, key=lambda s: s["id"], reverse=True)[:20]
+    log_rows = "".join(
+        f"<tr{' class=\'bestrow\'' if s['best'] else ''}><td>{s['id']}</td><td>{s['date']} {s['time']}</td>"
+        f"<td>{s['name']}</td><td>{s['expiry']}</td><td>{s['fit']}</td><td>{_rs(s['net'])}</td>"
+        f"<td>{_rs(s['ev'])}</td><td>{s['exit']['exit_date']}</td>"
+        f"<td>{'Tracking' if s['id'] in taken else 'Best' if s['best'] else '—'}</td></tr>" for s in recent)
+    html += f"""<section><h2>Tracked trades</h2>{tracked_html}</section>
+<section><h2>Suggestion log</h2><div class="wrap"><table class="rank"><tr><th>ID</th><th>Logged</th>
+<th>Strategy</th><th>Expiry</th><th>Fit</th><th>Net ₹/lot</th><th>EV after costs</th><th>Exit by</th>
+<th>Status</th></tr>{log_rows}</table></div>
+<p class="notes">Every idea is logged with its prices and exit plan in logs/suggestions.jsonl. Only suggestions
+you actually take are monitored.</p></section>"""
     return html
+
+
+def _levels(t):
+    """Exit levels for the whole tracked position, re-based on the actual fills."""
+    x, m = t["exit"], t["multiplier"]
+    shorts = ", ".join(f"{k:.0f} {ty}" for k, ty in x.get("short_strikes", []))
+    if x["kind"] == "credit":
+        txt = (f"Take profit when buy-back ≤ {_rs(x['tp_close_cost'] * m)} · warn at {_rs(x['warn_close_cost'] * m)}"
+               f" · stop at {_rs(x['sl_close_cost'] * m)}")
+    else:
+        txt = (f"Take profit when worth ≥ {_rs(x['tp_value'] * m)} · warn at {_rs(x['warn_value'] * m)}"
+               f" · stop at {_rs(x['sl_value'] * m)}")
+    return txt + (f" · spot trigger: short {shorts}" if shorts else "") + f" · exit by {x['exit_date']}"
+
+
+def _ltp_now(leg, snap):
+    return snap.get("ltps", {}).get(f"{leg['expiry']}|{leg['strike']:.0f}|{leg['type']}")
 
 
 def _xl(v):
     return None if v is None else "unlimited" if math.isinf(v) else round(v)
 
 
-def write_workbook(path, now, S, summary, rv, table, ideas, book, costs):
+def write_workbook(path, now, S, summary, rv, table, ideas, tracked, log, costs):
     from openpyxl import Workbook
     from openpyxl.styles import Font
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -393,22 +440,22 @@ def write_workbook(path, now, S, summary, rv, table, ideas, book, costs):
     for k, v in costs.items():
         ws.append([k, v])
 
-    if book and book["rows"]:
-        ws = wb.create_sheet("Positions")
-        ws.append(["Expiry", "Strike", "Type", "Lots", "Entry", "LTP", "P&L ₹", "IV %",
-                   "Delta", "Gamma", "Theta ₹/day", "Vega ₹/pt"])
-        for p in book["rows"]:
-            ws.append([p["expiry"], p["strike"], p["type"], p["lots"], p["entry"], p["ltp"],
-                       None if p["pnl"] is None else round(p["pnl"]), round(p["iv"] * 100, 2),
-                       round(p["delta"], 1), round(p["gamma"], 4), round(p["theta"]), round(p["vega"])])
-        ws.append([])
-        ws.append(["Spot shock", "Spot", "P&L ₹"])
-        for m, s_, v in book["scen"]:
-            ws.append([f"{m*100:+.0f}%", round(s_), round(v)])
-        ws = wb.create_sheet("Alerts", 1)
-        ws.append(["Level", "Alert", "Detail"])
-        for a in book.get("alerts", []):
-            ws.append([a["level"], a["kind"], a["msg"]])
+    ws = wb.create_sheet("Tracked trades", 1)
+    ws.append(["ID", "Strategy", "Lots ×", "Taken", "Entry net ₹", "P&L ₹", "Net delta", "Checked",
+               "Spot", "Exit by", "Alerts"])
+    for t, snap, alerts, _ in tracked:
+        ws.append([t["id"], t["name"], t["multiplier"], t["taken"], round(t["entry_net"]),
+                   round(snap["pnl"]), round(snap["delta"]), snap["time"], snap["spot"],
+                   t["exit"]["exit_date"], " | ".join(f"{a['kind']}: {a['msg']}" for a in alerts)])
+    ws = wb.create_sheet("Suggestion log")
+    ws.append(["ID", "Date", "Time", "Spot", "Strategy", "Expiry", "Fit", "Best", "Net ₹/lot",
+               "Cost ₹", "EV ₹", "Exit by", "Take profit", "Stop loss", "Legs"])
+    for s_ in sorted(log, key=lambda s: s["id"], reverse=True):
+        ws.append([s_["id"], s_["date"], s_["time"], s_["spot"], s_["name"], s_["expiry"], s_["fit"],
+                   "BEST" if s_["best"] else "", s_["net"], s_["cost"], s_["ev"], s_["exit"]["exit_date"],
+                   s_["exit"]["take_profit"], s_["exit"]["stop_loss"],
+                   "; ".join(f"{'Buy' if l['lots'] > 0 else 'Sell'} {l['expiry']} {l['strike']:.0f}{l['type']} @ {l['price']}"
+                             for l in s_["legs"])])
     for sheet in wb.worksheets:
         for row in sheet.iter_rows(min_row=1, max_row=3):
             for cell in row:

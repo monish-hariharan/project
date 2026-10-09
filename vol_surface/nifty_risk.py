@@ -71,7 +71,8 @@ def exit_plan(idea, rules, today: date):
                          + ", ".join(f"{k:.0f} {t}" for k, t in shorts) + ")"),
             time_exit=f"Close by {ex} ({rules['credit_exit_days_before_expiry']} trading days before "
                       f"{first_exp}) to avoid expiry-week gamma",
-            exit_date=ex)
+            exit_date=ex, tp_close_cost=net * (1 - tp), sl_close_cost=net * (1 + m),
+            warn_close_cost=net * (1 + m / 2))
     else:
         debit = -net
         tp = rules["debit_take_profit_pct"] / 100
@@ -85,8 +86,10 @@ def exit_plan(idea, rules, today: date):
                       f"≈ ₹{debit*sl + cost:,.0f} loss with costs)",
             time_exit=f"Close by {ex} ({rules['debit_exit_days_before_expiry']} trading day(s) before "
                       f"{first_exp}); time decay is fastest in the final days",
-            exit_date=ex)
+            exit_date=ex, tp_value=debit * (1 + tp), sl_value=debit * (1 - sl),
+            warn_value=debit * (1 - sl / 2))
     plan["days_held"] = max(_tdays(today, plan["exit_date"]), 0)
+    plan["short_strikes"] = [[k, t] for k, t in shorts]
     return plan
 
 
