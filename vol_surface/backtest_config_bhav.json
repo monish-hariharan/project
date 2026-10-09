@@ -1,0 +1,46 @@
+{
+  "vix_file": "C:/Users/monis/OneDrive/Desktop/VIX backtest/chatgpt_2/data/nifty_backtest_input/india_vix_daily.csv",
+  "vix_date_col": "date",
+  "vix_close_col": "close",
+  "lot_size_schedule": [
+    [
+      "2000-01-01",
+      75
+    ],
+    [
+      "2021-07-29",
+      50,
+      "expiry"
+    ],
+    [
+      "2024-04-26",
+      25
+    ],
+    [
+      "2025-01-02",
+      75,
+      "expiry"
+    ],
+    [
+      "2026-01-06",
+      65,
+      "expiry"
+    ]
+  ],
+  "entry_time": "15:00",
+  "entry_every_n_days": 5,
+  "check_every_minutes": 1,
+  "_lot_size_note": "Verified against Dhan: every contract's OI is a multiple of its lot (data/nifty_backtest_input/nifty_lot_size_*_from_dhan.csv); live Dhan scrip master shows 65 for all listed expiries. 'expiry' entries apply to contracts expiring on/after the date; others apply to trades on/after it (the Apr-2024 cut to 25 applied to all contracts from 2024-04-26).",
+  "max_stale_minutes": 1,
+  "min_coverage": 0.5,
+  "report_lot": 65,
+  "lot_size_by_expiry": {
+    "2025-01-30": 25,
+    "2025-03-27": 25,
+    "2025-06-26": 25,
+    "2025-12-30": 25
+  },
+  "_lot_override_note": "Quarterly/half-yearly contracts listed before the Nov-2024 revision kept the 25 lot until expiry (Dhan OI multiples). Verify; remove an entry if your contract notes show otherwise.",
+  "entry_max_stale_minutes": 1,
+  "_bhav_note": "Daily NSE bhavcopy store: one end-of-day snapshot per day. Entry and all checks use real closing prices of contracts that traded that day; stops are checked at the close only."
+}

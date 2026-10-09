@@ -353,6 +353,9 @@ def run(cfg, store_path, out_dir):
         reg = eng.regime(S, prev, vfc, z, rules)
         lot = lot_size(d, cfg, exp)
         for fam, legs in build(snap, exp, F, T, rules, vix.get(prev["date"]), has_ba).items():
+            dl = snap[(exp, legs[0][0], legs[0][1])].get("lot")
+            if dl is not None and dl == dl and dl > 0:     # lot size published in the data (bhavcopy)
+                lot = int(dl)
             entry, src = [], None
             for k, t, n in legs:
                 px, src = fill(snap[(exp, k, t)], n, n, has_ba, c)
