@@ -36,9 +36,8 @@ python nifty_dashboard.py --chain data/nifty_chain_2026-10-09.csv \
 
 `costs.json` holds the broker schedule (Motilal Oswal F&O options: ₹40/lot/order, STT 0.15% sell,
 exchange 0.035%, SEBI 0.0001%, stamp 0.003% buy, GST 18%, 2 orders per leg) and slippage settings.
-Each strategy idea shows its full charge breakdown, P&L limits and breakevens after costs, and an
-expected P&L simulated at 20-day (and 5-day) realised vol. Ideas are ranked by EV / capital at risk;
-the top one is marked "Best trade" only if its EV after costs is positive.
+Each strategy idea shows its full charge breakdown and its P&L limits and breakevens after costs,
+from today's real prices. Nothing is simulated.
 
 ## Exit plans and position alerts
 
@@ -61,3 +60,18 @@ for a confirmed break; (5) a risk gate — EV after costs > 0, max loss within
 Each day's forecast is logged to `logs/predictions.jsonl` and scored against the next session.
 
 Your own positions can be monitored with `nifty_tracker.py add` (see DAILY_RUN.md).
+
+## Real-data track record (no simulation)
+
+Win rate, expectancy, drawdowns and stop rates come only from real outcomes:
+
+* `backtest_stats.json` — from `nifty_backtest.py`, run on your own historical option data
+  (`prepare` streams any-size CSV/Parquet into a per-day Parquet store; `run` replays the
+  strategies at real bid/ask, applies rules.json exits and costs.json charges). Copy
+  `backtest_config.example.json`, map your column names, and commit the resulting
+  `backtest_stats.json` (and optionally `backtest_trades.csv`).
+* `logs/paper.json` — every logged suggestion marked to market at real Dhan prices each run
+  until its exit rule fires.
+
+A family needs `min_history_trades` (rules.json) closed trades before its record is used;
+until then ideas are ranked by payoff ratio from today's prices and the record shows "none yet".

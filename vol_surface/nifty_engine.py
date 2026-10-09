@@ -269,7 +269,7 @@ def decide(cands, reg, edge, gex, S, rules, events_today=False):
         thin = [l for l in c["legs"] if l["oi"] < rules["min_leg_oi_lots"]]
         gate = dict(
             regime_ok=c["family"] in allowed,
-            ev_ok=e["ev"] > 0,
+            ev_ok=e["ev"] is not None and e["ev"] > 0,
             size_ok=lots >= 1,
             liquidity_ok=not thin,
             lots=lots, budget=budget, max_loss=ml_abs,
@@ -277,7 +277,8 @@ def decide(cands, reg, edge, gex, S, rules, events_today=False):
         if not gate["regime_ok"]:
             gate["notes"].append("not the strategy this regime calls for")
         if not gate["ev_ok"]:
-            gate["notes"].append(f"EV after costs ₹{e['ev']:,.0f} ≤ 0")
+            gate["notes"].append("no real track record yet" if e["ev"] is None else
+                                 f"historical expectancy ₹{e['ev']:,.0f} ≤ 0 ({e['hist']['source']})")
         if not gate["size_ok"]:
             gate["notes"].append(f"max loss ₹{ml_abs:,.0f}/lot exceeds the ₹{budget:,.0f} risk budget")
         if thin:

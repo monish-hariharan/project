@@ -10,17 +10,16 @@ Charges follow the broker schedule in costs.json (Motilal Oswal F&O options by d
   GST        on brokerage + exchange + SEBI
 orders_per_leg = 1 (hold to expiry) or 2 (enter and exit). The exit order is costed at the
 entry premium, since the exit price is unknown. With orders_per_leg = 1, STT on the intrinsic
-value of exercised long options (stt_exercise_pct) is charged in the simulation.
+value of exercised long options (stt_exercise_pct) applies to ITM legs held to expiry.
 
 Slippage: with only last-traded prices available, each order is assumed to fill
 max(min_ticks × ₹0.05, pct × premium) worse than LTP, multiplied by a liquidity factor
 from the strike's open interest (deep book ×1, thin ×2, very thin ×4).
 
-Ranking: each idea's P&L is simulated to its first expiry with spot following a lognormal
-walk at a chosen "real-world" volatility (20-day realised by default). Expiring legs settle
-at intrinsic; later legs are revalued with Black-76 at today's IV. Expected P&L after all
-costs, divided by the maximum loss, ranks the ideas. Positive EV means the option prices
-look rich or cheap relative to how much NIFTY has actually been moving, after costs.
+Ranking uses real data only: the strategy family's historical expectancy per unit of risk
+from your backtest (backtest_stats.json) or from the forward record of logged suggestions
+marked to market at real prices. Without a record, ideas are ranked by their payoff ratio
+from today's actual prices after costs. Nothing is simulated.
 """
 from __future__ import annotations
 
@@ -29,7 +28,6 @@ import math
 from pathlib import Path
 
 import numpy as np
-from scipy.stats import norm
 
 LOT = 65
 TICK = 0.05
@@ -90,62 +88,21 @@ def trade_costs(legs, c):
     return charges, slip
 
 
-def _b76(F, K, T, sigma, is_call):
-    F = np.asarray(F, dtype=float)
-    if T <= 0:
-        return np.maximum(F - K, 0) if is_call else np.maximum(K - F, 0)
-    sd = sigma * math.sqrt(T)
-    d1 = (np.log(F / K) + 0.5 * sd * sd) / sd
-    d2 = d1 - sd
-    return F * norm.cdf(d1) - K * norm.cdf(d2) if is_call else K * norm.cdf(-d2) - F * norm.cdf(-d1)
+def evaluate(idea, c, history=None):
+    """Real costs and the payoff after costs from today's prices; history stats if available.
 
-
-def simulate(legs, S, sigma, n=40000, seed=7, exercise_stt_pct=0.0):
-    """P&L per path (₹, before costs) at the first leg expiry, spot lognormal at `sigma`."""
-    T1 = min(l["T"] for l in legs)
-    rng = np.random.default_rng(seed)
-    z = rng.standard_normal(n)
-    # drift-free in forward terms: centre on the first expiry's forward
-    F1 = min(legs, key=lambda l: l["T"])["F"]
-    ST = F1 * np.exp(-0.5 * sigma * sigma * T1 + sigma * math.sqrt(T1) * z)
-    pnl = np.zeros(n)
-    for l in legs:
-        is_call = l["type"] == "CE"
-        rem = l["T"] - T1
-        if rem <= 1e-9:
-            val = np.maximum(ST - l["strike"], 0) if is_call else np.maximum(l["strike"] - ST, 0)
-            if exercise_stt_pct and l["lots"] > 0:      # STT on intrinsic of exercised long options
-                pnl -= exercise_stt_pct / 100 * val * l["lots"] * LOT
-        else:
-            carry = l["F"] / F1           # keep the forward spread between the two expiries
-            val = _b76(ST * carry, l["strike"], rem, l["iv"], is_call)
-        pnl += l["lots"] * (val - l["price"]) * LOT
-    return pnl
-
-
-def evaluate(idea, S, sigma, c, alt_sigma=None):
+    No simulation: expected value, win rate, drawdown and stop rate come only from real
+    outcomes (your backtest file and the forward record of logged suggestions). Until a
+    strategy family has a record, those fields are None and ranking falls back to the
+    payoff ratio (max profit after costs / max loss after costs).
+    """
     legs = idea["legs"]
     charges, slip = trade_costs(legs, c)
     cost = charges["total"] + slip
-    ex = c.get("stt_exercise_pct", 0.0) if c["orders_per_leg"] < 2 else 0.0
-    pnl = simulate(legs, S, sigma, exercise_stt_pct=ex) - cost
-    ev = float(pnl.mean())
-    max_loss = idea.get("max_loss")
-    if max_loss is None or math.isinf(max_loss):
-        risk = float(-np.percentile(pnl, 1))            # 1st-percentile loss as a risk proxy
-    else:
-        risk = -(max_loss) + cost
-    out = dict(charges=charges, slippage=slip, cost=cost, ev=ev, pop=float((pnl > 0).mean()),
-               p5=float(np.percentile(pnl, 5)), risk=max(risk, 1.0), sigma=sigma,
-               net_after=idea["net"] - cost)
-    out["ev_on_risk"] = ev / out["risk"]
-    out["cost_pct_of_max_profit"] = (cost / idea["max_profit"]
-                                     if idea.get("max_profit") not in (None, float("inf"))
-                                     and idea["max_profit"] > 0 else None)
-    if alt_sigma:
-        out["ev_alt"] = float((simulate(legs, S, alt_sigma, exercise_stt_pct=ex) - cost).mean())
-        out["alt_sigma"] = alt_sigma
-    # cost-adjusted payoff limits and breakevens for single-expiry structures
+    out = dict(charges=charges, slippage=slip, cost=cost, net_after=idea["net"] - cost)
+    mp, ml = idea.get("max_profit"), idea.get("max_loss")
+    out["max_profit_after"] = mp if mp is None or math.isinf(mp) else mp - cost
+    out["max_loss_after"] = ml if ml is None or math.isinf(ml) else ml - cost
     if idea.get("breakevens") is not None and len({l["expiry"] for l in legs}) == 1:
         lo = min(l["strike"] for l in legs) * 0.85
         hi = max(l["strike"] for l in legs) * 1.15
@@ -157,53 +114,23 @@ def evaluate(idea, S, sigma, c, alt_sigma=None):
         pay -= cost
         sign = np.sign(pay)
         out["breakevens_after"] = [float(grid[i]) for i in range(1, len(grid)) if sign[i] != sign[i - 1]]
-        out["max_profit_after"] = (float("inf") if math.isinf(idea.get("max_profit") or 0)
-                                   else float(pay.max()))
-        out["max_loss_after"] = (float("-inf") if math.isinf(idea.get("max_loss") or 0)
-                                 else float(pay.min()))
-    elif idea.get("max_loss") is not None and not math.isinf(idea["max_loss"]):
-        out["max_loss_after"] = idea["max_loss"] - cost
+    risk = -out["max_loss_after"] if out["max_loss_after"] not in (None,) and not math.isinf(out["max_loss_after"]) else None
+    out["risk"] = risk
+    reward = out["max_profit_after"]
+    out["payoff_ratio"] = (reward / risk if risk and reward is not None and not math.isinf(reward) else None)
+    h = (history or {}).get(idea.get("family"))
+    out["hist"] = h
+    out["ev"] = h["expectancy"] if h else None
+    out["pop"] = h["win_rate"] if h else None
+    if h and risk:
+        out["score"], out["score_basis"] = h["expectancy"] / risk, f"{h['source']} expectancy / risk"
+    else:
+        out["score"], out["score_basis"] = (out["payoff_ratio"] or 0.0), "payoff ratio (no record yet)"
+    out["ev_on_risk"] = out["score"]
     return out
 
 
-def rank(ideas, S, sigma, c, alt_sigma=None):
+def rank(ideas, c, history=None):
     for i in ideas:
-        i["eval"] = evaluate(i, S, sigma, c, alt_sigma)
-    ideas.sort(key=lambda i: i["eval"]["ev_on_risk"], reverse=True)
-    best = ideas[0] if ideas and ideas[0]["eval"]["ev"] > 0 else None
-    for i in ideas:
-        i["best"] = i is best
-    return best
-
-
-def drawdown(legs, S, sigma, exit_date, today, cost=0.0, stop_loss=None, n=4000, seed=11):
-    """Expected maximum drawdown of a position marked to market daily until `exit_date`.
-
-    Spot follows a driftless lognormal walk at `sigma` (one step per trading day); each leg
-    is revalued with Black-76 at its current IV. P&L starts at minus the round-trip costs.
-    Returns mean and 95th-percentile peak-to-trough drawdown (₹, positive numbers), the
-    worst P&L on the way, and the chance the path touches `stop_loss` (₹ P&L, negative).
-    """
-    days = max(int(np.busday_count(today.isoformat(), exit_date)), 1)
-    T1 = min(l["T"] for l in legs)
-    dT = min(T1, days * 365 / 252 / 365) / days          # calendar time per trading day (years)
-    rng = np.random.default_rng(seed)
-    z = rng.standard_normal((n, days))
-    step = sigma * math.sqrt(1 / 252)
-    logS = np.cumsum(-0.5 * step * step + step * z, axis=1)
-    pnl = np.full((n, days + 1), -cost)
-    for k in range(1, days + 1):
-        Sk = S * np.exp(logS[:, k - 1])
-        tot = np.zeros(n)
-        for l in legs:
-            Fk = l["F"] * Sk / S
-            v = _b76(Fk, l["strike"], max(l["T"] - k * dT, 0.0), l["iv"], l["type"] == "CE")
-            tot += l["lots"] * (v - l["price"]) * LOT
-        pnl[:, k] = tot - cost
-    peak = np.maximum.accumulate(np.concatenate([np.zeros((n, 1)), pnl], axis=1), axis=1)[:, 1:]
-    mdd = (peak - pnl).max(axis=1)
-    out = dict(days=days, mean=float(mdd.mean()), p95=float(np.percentile(mdd, 95)),
-               worst_pnl_median=float(np.median(pnl.min(axis=1))), sigma=sigma)
-    if stop_loss is not None:
-        out["p_stop"] = float((pnl.min(axis=1) <= stop_loss).mean())
-    return out
+        i["eval"] = evaluate(i, c, history)
+    ideas.sort(key=lambda i: i["eval"]["score"], reverse=True)

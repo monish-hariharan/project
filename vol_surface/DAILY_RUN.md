@@ -40,8 +40,9 @@ Never place, modify or cancel orders.
 8. **Deliver** — send `output/download/nifty_dashboard_<date>.html` and `.xlsx` as attachments;
    republish the web page; commit `data/`, `logs/` and the CSV outputs, and push.
 9. **Message** — the decision engine verdict first (regime, vol edge, positioning, risk gate (advisory) →
-   recommended strategy with expected max drawdown and P(stop), and the gate notes if it failed), then
-   tracked-trade alerts (with each trade's forward drawdown), then the top limitations that apply today (take profit, stop loss, strike breached/tested,
+   recommended strategy with its real track record (backtest / forward record) or "no record yet", and the
+   gate notes if it failed), then tracked-trade alerts (with realised drawdown so far), then the top
+   limitations that apply today. Never quote simulated figures (take profit, stop loss, strike breached/tested,
    recentre, hedge, exit date, roll — with the exact trade proposed). Then 3–5 lines: spot and
    today's move, ATM IV vs realised, the best trade after costs (or "stay flat") with its ID and
    exit plan. Do not ask for positions.

@@ -70,8 +70,8 @@ def log_suggestions(ideas, now, S, log_dir=LOG_DIR):
             spot=S, name=i["name"], expiry=i["expiry"], fit=i["fit"], best=i["best"],
             legs=[dict(expiry=l["expiry"], strike=l["strike"], type=l["type"], lots=l["lots"],
                        price=l["price"]) for l in i["legs"]],
-            net=round(i["net"], 2), cost=round(e["cost"], 2), ev=round(e["ev"], 2),
-            ev_on_risk=round(e["ev_on_risk"], 4), pop=round(e["pop"], 3),
+            family=i.get("family"), net=round(i["net"], 2), cost=round(e["cost"], 2),
+            payoff_ratio=e.get("payoff_ratio"), record=(e.get("hist") or {}).get("source"),
             exit={k: v for k, v in x.items() if k != "days_held"}))
         i["id"] = new[-1]["id"]
     path.write_text("".join(json.dumps(s, default=str) + "\n" for s in keep + new))

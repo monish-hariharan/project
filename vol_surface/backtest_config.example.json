@@ -1,0 +1,27 @@
+{
+  "data_dir": "D:/nifty_data",
+  "glob": "**/*",
+  "columns": {
+    "timestamp": "timestamp",
+    "expiry": "expiry",
+    "strike": "strike",
+    "type": "option_type",
+    "ltp": "close",
+    "bid": "bid",
+    "ask": "ask",
+    "oi": "oi",
+    "underlying": "underlying_price",
+    "symbol": "symbol"
+  },
+  "symbol_filter": {"column": "symbol", "value": "NIFTY"},
+  "type_values": {"CE": ["CE", "C", "CALL"], "PE": ["PE", "P", "PUT"]},
+  "timestamp_format": null,
+  "expiry_format": null,
+  "vix_file": "D:/nifty_data/india_vix_daily.csv",
+  "vix_date_col": "date",
+  "vix_close_col": "close",
+  "lot_size_schedule": [["2000-01-01", 50], ["2024-11-20", 75], ["2025-12-30", 65]],
+  "entry_time": "09:25",
+  "entry_every_n_days": 5,
+  "check_every_minutes": 15
+}

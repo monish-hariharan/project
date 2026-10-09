@@ -1,0 +1,74 @@
+{
+ "S20261009-1": {
+  "id": "S20261009-1",
+  "name": "Bear put debit spread",
+  "family": "bear",
+  "opened": "2026-10-09 15:30",
+  "status": "open",
+  "entry_net": -4481.75,
+  "cost": 522.21,
+  "series": [
+   {
+    "t": "2026-10-09 15:30",
+    "spot": 22520.45,
+    "pnl": -522.21
+   }
+  ],
+  "max_dd": 522.21,
+  "last_pnl": -522.21
+ },
+ "S20261009-2": {
+  "id": "S20261009-2",
+  "name": "Bull call debit spread",
+  "family": "bull",
+  "opened": "2026-10-09 15:30",
+  "status": "open",
+  "entry_net": -6298.5,
+  "cost": 546.19,
+  "series": [
+   {
+    "t": "2026-10-09 15:30",
+    "spot": 22520.45,
+    "pnl": -546.19
+   }
+  ],
+  "max_dd": 546.19,
+  "last_pnl": -546.19
+ },
+ "S20261009-3": {
+  "id": "S20261009-3",
+  "name": "Iron condor (\u224816\u0394 shorts)",
+  "family": "condor",
+  "opened": "2026-10-09 15:30",
+  "status": "open",
+  "entry_net": 2970.5,
+  "cost": 565.52,
+  "series": [
+   {
+    "t": "2026-10-09 15:30",
+    "spot": 22520.45,
+    "pnl": -565.52
+   }
+  ],
+  "max_dd": 565.52,
+  "last_pnl": -565.52
+ },
+ "S20261009-4": {
+  "id": "S20261009-4",
+  "name": "Iron condor (VIX range shorts)",
+  "family": "condor",
+  "opened": "2026-10-09 15:30",
+  "status": "open",
+  "entry_net": 2499.25,
+  "cost": 548.05,
+  "series": [
+   {
+    "t": "2026-10-09 15:30",
+    "spot": 22520.45,
+    "pnl": -548.05
+   }
+  ],
+  "max_dd": 548.05,
+  "last_pnl": -548.05
+ }
+}

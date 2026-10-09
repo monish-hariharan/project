@@ -29,5 +29,6 @@
   "min_leg_oi_lots": 1000,
   "event_dates": [],
   "stop_max_loss_fraction": 0.5,
-  "ignore_gate": true
+  "ignore_gate": true,
+  "min_history_trades": 20
 }

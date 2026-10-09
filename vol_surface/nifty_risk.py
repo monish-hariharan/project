@@ -96,7 +96,7 @@ def exit_plan(idea, rules, today: date):
             exit_date=ex, tp_value=debit * (1 + tp), sl_value=debit * (1 - sl),
             warn_value=debit * (1 - sl / 2))
     plan["days_held"] = max(_tdays(today, plan["exit_date"]), 0)
-    plan["short_strikes"] = [[k, t] for k, t in shorts]
+    plan["short_strikes"] = [[k, t] for k, t in shorts] if net > 0 else []   # spot trigger: credit trades only
     return plan
 
 

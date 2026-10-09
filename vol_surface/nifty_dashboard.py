@@ -25,7 +25,8 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import norm
 
-from nifty_costs import drawdown, load_costs, rank
+from nifty_costs import load_costs, rank
+from nifty_history import history as hist_merge, load_backtest, paper_stats, paper_update
 import nifty_engine as eng
 from nifty_risk import exit_plan, load_rules
 from nifty_strategies import load_positions, suggest
@@ -147,6 +148,7 @@ def main():
     ap.add_argument("--vix", help="India VIX daily OHLC CSV (same sessions as --daily)")
     ap.add_argument("--vix-now", type=float, help="India VIX at --asof (default: last close)")
     ap.add_argument("--prev-chain", help="earlier chain snapshot for OI change")
+    ap.add_argument("--backtest", help="backtest_stats.json from nifty_backtest.py (default: next to this script)")
     a = ap.parse_args()
 
     now = datetime.strptime(a.asof, "%Y-%m-%d %H:%M").replace(tzinfo=IST)
@@ -216,7 +218,12 @@ def main():
     E_next = eng.expected_move(S, vix_now)                    # forecast for the next session
     rb = eng.range_backtest(nifty, vixd) if vixd else None
     ideas, target = eng.candidates(table, summary, S, vix_now, rules)
-    rank(ideas, S, vf["forecast"], costs, alt_sigma=rv["cc_5"])
+    import json as _json
+    paper_path = Path(a.log_dir) / "paper.json"
+    paper_book = _json.loads(paper_path.read_text()) if paper_path.exists() else {}
+    backtest = load_backtest(a.backtest)
+    hist = hist_merge(backtest, paper_stats(paper_book), rules.get("min_history_trades", 20))
+    rank(ideas, costs, hist)
     edge = eng.vol_edge(target["atm_iv"], vf["forecast"], rules)
     prev_day = dict(high=float(nifty["high"][-1]), low=float(nifty["low"][-1]))
     reg = eng.regime(S, prev_day, vf, Z, rules)
@@ -239,10 +246,6 @@ def main():
         i["exit"] = exit_plan(i, rules, now.date())
         i["reasons"] = _engine_reasons(i, reg, edge, rb, gex, S)
         i["fit"] = "Pass" if i["gate"]["pass"] else "Fail"
-        x = i["exit"]
-        stop_pnl = (i["net"] - x["sl_close_cost"]) if x["kind"] == "credit" else (x["sl_value"] + i["net"])
-        i["dd"] = drawdown(i["legs"], S, vf["forecast"], x["exit_date"], now.date(),
-                           cost=i["eval"]["cost"], stop_loss=stop_pnl - i["eval"]["cost"])
     ideas.sort(key=lambda i: (not i["best"], not i["gate"]["pass"], -i["eval"]["ev_on_risk"]))
     best = decision["trade"]
     plog = Path(a.log_dir) / "predictions.jsonl"
@@ -251,26 +254,21 @@ def main():
     engine = dict(vix_prev=vix_prev, vix_now=vix_now, E_prev=E_prev, Z=Z, E_next=E_next, vf=vf, rb=rb,
                   edge=edge, reg=reg, gex=gex, pm_front=pm_front, pm_target=pm_target, oic=oic,
                   skew=skew, decision=decision, target=target, score=score, prev_close=prev_close,
-                  rules=rules)
+                  rules=rules, hist=hist, backtest=backtest)
     log_suggestions(ideas, now, S, a.log_dir)
     started = match_positions(load_positions(a.positions), now, a.log_dir) if a.positions else []
     tracked = monitor(table, summary, S, now, rules, a.log_dir, only_new=False)
     log = read_suggestions(a.log_dir)
-    rows_by = {(r["expiry"], r["strike"]): r for r in table}
-    for t, snap, alerts, _ in tracked:
-        legs_now = []
-        for l in t["legs"]:
-            r = rows_by.get((l["expiry"], l["strike"]))
-            if r is None:
-                break
-            side = "ce" if l["type"] == "CE" else "pe"
-            legs_now.append(dict(l, price=r[f"{side}_ltp"], iv=r["iv"], F=r["forward"], T=r["days"] / 365))
-        else:
-            x, m = t["exit"], t["multiplier"]
-            value = snap["value"]
-            stop = (-(x["sl_close_cost"] * m - (-value)) if x["kind"] == "credit"
-                    else (x["sl_value"] * m - value))
-            t["dd"] = drawdown(legs_now, S, vf["forecast"], x["exit_date"], now.date(), 0.0, stop)
+    paper_book = paper_update(log, table, S, now, a.log_dir)
+    engine["paper"] = paper_book
+    for s_ in log:
+        s_["paper"] = paper_book.get(s_["id"])
+    engine["paper_stats"] = paper_stats(paper_book)
+    for t, snap, alerts, _ in tracked:             # realised drawdown from the actual checks
+        pn = [0.0] + [c_["pnl"] for c_ in t.get("checks", [])]
+        peak = np.maximum.accumulate(pn)
+        t["dd"] = dict(realised=float((peak - np.array(pn)).max()), checks=len(pn) - 1,
+                       worst=float(min(pn)), since=t["taken"])
 
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -286,9 +284,11 @@ def main():
                           rv, table, ideas, tracked, log, costs, limits)
     for i in ideas:
         e = i["eval"]
+        h = e["hist"]
         print(f"{'BEST ' if i['best'] else '     '}[{i['fit']}] {i['name']} {i['expiry']}: "
-              f"net ₹{i['net']:,.0f}, costs ₹{e['cost']:,.0f}, EV ₹{e['ev']:,.0f} "
-              f"(EV/risk {e['ev_on_risk']*100:+.1f}%, POP {e['pop']*100:.0f}%)")
+              f"net ₹{i['net']:,.0f}, costs ₹{e['cost']:,.0f}, payoff ratio "
+              f"{(e['payoff_ratio'] or 0):.2f}, record: "
+              + (f"{h['source']} n={h['n']} expectancy ₹{h['expectancy']:,.0f}" if h else "none yet"))
     d_ = engine["decision"]
     print(f"ENGINE: regime {reg['label']}{' ' + reg['direction'] if reg['direction'] else ''} (Z {Z:+.2f}), "
           f"vol edge {edge['label']} (R_IV {edge['ratio']:.2f}), GEX {gex['regime']} flip "
@@ -335,6 +335,27 @@ def _engine_reasons(i, reg, edge, rb, gex, S):
     return r
 
 
+def _paper_txt(rec, html=True):
+    if not rec or not rec.get("series"):
+        return "not marked yet"
+    if rec["status"] == "closed" and "final_pnl" in rec:
+        return f"{_rs(rec['final_pnl'])} closed ({rec['reason']}), max DD {_rs(rec['max_dd'])}"
+    return f"{_rs(rec['last_pnl'])} open, max DD {_rs(rec['max_dd'])}"
+
+
+def _record_txt(e):
+    h = e.get("hist")
+    if not h:
+        return ("Track record: <b>none yet</b> — expectancy, win rate and drawdown appear once the backtest "
+                "file or the forward record has enough closed trades.")
+    pf = f", profit factor {h['profit_factor']:.2f}" if h.get("profit_factor") else ""
+    dd = (f", max drawdown median {_rs(h['max_dd_median'])} / worst {_rs(h['max_dd_worst'])}"
+          if h.get("max_dd_median") is not None else "")
+    st = f", stop hit {h['stop_rate']*100:.0f}%" if h.get("stop_rate") is not None else ""
+    return (f"Track record ({h['source']}, {h['n']} trades): win rate {h['win_rate']*100:.0f}%, expectancy "
+            f"{_rs(h['expectancy'])}/lot after costs, worst trade {_rs(h['worst'])}{dd}{st}{pf}.")
+
+
 def _tile(title, value, cls, detail):
     return (f"<div class='tile'><span class='eyebrow'>{title}</span><b class='{cls}'>{value}</b>"
             f"<span class='muted'>{detail}</span></div>")
@@ -360,16 +381,14 @@ def engine_section(en, S, summary):
         g, e, x = trade["gate"], trade["eval"], trade["exit"]
         legs = "; ".join(f"{'buy' if l['lots'] > 0 else 'sell'} {l['strike']:.0f} {l['type']} @ {l['price']:.2f}"
                          for l in trade["legs"])
-        dd = trade["dd"]
         warn = ""
         if d.get("override"):
             warn = (" <span class='pill warn'>Gate failed</span> Shown because the gate is set to advisory "
                     "(ignore_gate): " + "; ".join(g["notes"]) + ".")
         final = (f"<p class='decision {'warn' if d.get('override') else 'good'}'><b>{trade['name']} — {trade['expiry']}</b> "
-                 f"({trade.get('id', '')}): {legs}. Size {max(g['lots'], 1)} lot(s). EV after costs {_rs(e['ev'])}/lot, "
-                 f"max loss {_rs(-g['max_loss'])}/lot, expected max drawdown {_rs(dd['mean'])} "
-                 f"(worst 5%: {_rs(dd['p95'])}) over {dd['days']} trading days, chance of hitting the stop "
-                 f"{dd.get('p_stop', 0)*100:.0f}%. Invalidation: {x['stop_loss']}. Exit by {x['exit_date']}.{warn}</p>")
+                 f"({trade.get('id', '')}): {legs}. Size {max(g['lots'], 1)} lot(s). Net after costs "
+                 f"{_rs(e['net_after'])}, max loss after costs {_rs(e['max_loss_after'])}/lot. "
+                 f"{_record_txt(e)} Invalidation: {x['stop_loss']}. Exit by {x['exit_date']}.{warn}</p>")
     else:
         final = "<p class='decision bad'><b>NO TRADE.</b> No candidate passes every gate today.</p>"
     matrix = "".join(f"<li>{m}</li>" for m in d["matrix"])
@@ -445,17 +464,17 @@ def limitations(en, ideas, c, nifty):
         f"<b>Short history.</b> The range model, realised-vol forecast and drawdown inputs rest on {n} daily "
         "sessions (the Dhan connector returns history 5 candles at a time). Coverage and VRP estimates "
         f"{'(' + str(rb['by'][0]['n']) + ' sessions) ' if rb else ''}have wide error bars, and 13 weeks cover one market regime.",
-        "<b>No historical option data, so no strategy backtest.</b> Expected value, drawdown and stop "
-        "probabilities come from a simulation, not from how these trades actually performed. The "
-        "prediction log builds a real out-of-sample record from now on.",
-        "<b>Model, not market, distribution.</b> Simulations use a driftless lognormal walk at the forecast "
-        f"realised vol ({en['vf']['forecast']*100:.1f}%) with constant IV. Real NIFTY returns have fat tails, "
-        "overnight gaps and volatility that rises when the market falls, so true drawdowns and stop-outs are "
-        "likely larger than shown, especially for short-premium trades.",
-        "<b>Drawdown is peak-to-trough.</b> Expected max drawdown counts open profit given back, so it can "
-        "exceed the trade's maximum loss; it is a simulated average, not a cap.",
-        "<b>IV held constant.</b> Mark-to-market assumes each leg keeps today's IV. A volatility spike widens "
-        "losses on short options (iron condors) and helps long options, even if spot does not move.",
+        ("<b>No track record yet.</b> Until your backtest file (backtest_stats.json) is added or the forward "
+         "record has enough closed trades, ideas are ranked only by their payoff from today's prices; win rate, "
+         "expectancy and drawdown are shown as 'none yet' rather than estimated."
+         if not en.get("hist") else
+         "<b>Track records are history, not forecasts.</b> Win rates, expectancy and drawdowns come from past "
+         "trades; the next period can differ, especially across regimes the history does not cover."),
+        "<b>Forward record uses paper entries.</b> Logged suggestions are marked at real last-traded prices "
+        "from the time they were suggested; your actual fills, and checks only at run times (morning and "
+        "hourly), make real results differ.",
+        "<b>Payoff ratio ignores probability.</b> Max profit ÷ max loss after costs says nothing about how "
+        "likely each outcome is; a condor with a good ratio can still lose more often than it wins.",
         "<b>Prices are last trades, not quotes.</b> The chain gives LTP and OI only, no bid/ask. Fills can "
         f"differ; slippage is an estimate ({c['slippage_pct']}% of premium or {c['slippage_min_ticks']} tick per "
         "order, more for thin strikes), not measured.",
@@ -547,11 +566,7 @@ def extra_sections(ideas, tracked, log, best, c):
             f"<tr><td>GST</td><td>{_rs(ch['gst'])}</td></tr>"
             f"<tr><td>Slippage (est.)</td><td>{_rs(e['slippage'])}</td></tr>"
             f"<tr class='total'><td>Total cost</td><td>{_rs(e['cost'])}</td></tr></table>")
-        ev_html = (f"<p class='figs ev {'up' if e['ev'] > 0 else 'down'}'>Expected P&amp;L after costs "
-                   f"{_rs(e['ev'])} at {e['sigma']*100:.1f}% vol (20d realised)"
-                   + (f" · {_rs(e['ev_alt'])} at {e['alt_sigma']*100:.1f}% (5d)" if 'ev_alt' in e else "")
-                   + f"<br>Chance of profit {e['pop']*100:.0f}% · EV / risk {e['ev_on_risk']*100:+.1f}%"
-                   + f" · 5% worst case {_rs(e['p5'])}</p>")
+        ev_html = f"<p class='figs'>{_record_txt(e)}</p>"
         cards.append(f"""<article class="idea">
 <header>{badge}<h3>{i['name']}</h3>
 <span class="muted id">{i.get('id', '')}</span>
@@ -561,8 +576,7 @@ def extra_sections(ideas, tracked, log, best, c):
 <p class="figs">{net} per lot before costs · {_rs(e['net_after'])} after costs<br>
 After costs: max profit {_rs(mp)} · max loss {_rs(ml)} · breakeven {be}<br>
 Δ {i['delta']:+.1f} · Γ {i['gamma']:+.3f} · Θ {_rs(i['theta'])}/day · vega {_rs(i['vega'])}/vol-pt (per lot)</p>
-{ev_html}<p class="figs">Expected max drawdown {_rs(i['dd']['mean'])} · worst 5% {_rs(i['dd']['p95'])}
-· over {i['dd']['days']} trading days to {i['exit']['exit_date']} · P(stop hit) {i['dd'].get('p_stop', 0)*100:.0f}%</p>
+{ev_html}
 <div class="exit"><b>Exit plan</b><ul>
 <li><span class="tag">Take profit</span> {i['exit']['take_profit']}</li>
 <li><span class="tag">Stop loss</span> {i['exit']['stop_loss']}</li>
@@ -571,31 +585,31 @@ After costs: max profit {_rs(mp)} · max loss {_rs(ml)} · breakeven {be}<br>
 </article>""")
     rank_rows = "".join(
         f"<tr{' class=\'bestrow\'' if i['best'] else ''}><td>{n}</td><td>{i['name']}</td><td>{i['expiry']}</td>"
-        f"<td>{_rs(i['net'])}</td><td>{_rs(i['eval']['cost'])}</td><td>{_rs(i['eval']['ev'])}</td>"
-        f"<td>{_rs(i['eval'].get('ev_alt'))}</td><td>{i['eval']['pop']*100:.0f}%</td>"
-        f"<td>{_rs(i['eval']['risk'])}</td><td>{i['eval']['ev_on_risk']*100:+.1f}%</td></tr>"
+        f"<td>{_rs(i['net'])}</td><td>{_rs(i['eval']['cost'])}</td><td>{_rs(i['eval']['max_loss_after'])}</td>"
+        f"<td>{(i['eval']['payoff_ratio'] or 0):.2f}</td>"
+        f"<td>{(str(i['eval']['hist']['n']) + ' · ' + _rs(i['eval']['ev'])) if i['eval']['hist'] else '—'}</td>"
+        f"<td>{(format(i['eval']['pop']*100, '.0f') + '%') if i['eval']['pop'] is not None else '—'}</td>"
+        f"<td>{i['eval']['score_basis']}</td></tr>"
         for n, i in enumerate(ideas, 1))
     if best:
         verdict = (f"<p class='today'><b>Engine pick: {best['name']} ({best['expiry']}).</b> "
-                   f"Expected {_rs(best['eval']['ev'])} per lot after {_rs(best['eval']['cost'])} of charges "
-                   f"and slippage, {best['eval']['ev_on_risk']*100:+.1f}% of the capital at risk, "
-                   f"{best['eval']['pop']*100:.0f}% chance of profit.</p>")
+                   f"Net {_rs(best['eval']['net_after'])}/lot after {_rs(best['eval']['cost'])} of charges and "
+                   f"estimated slippage. {_record_txt(best['eval'])}</p>")
     else:
         verdict = ("<p class='today'><b>No candidate passes every gate today (NO TRADE).</b> "
                    "The cards show which gate each one fails.</p>")
-    sigma = ideas[0]["eval"]["sigma"] if ideas else 0
     html = ('<section><h2>Strategy ideas</h2>' + verdict +
             '<div class="wrap"><table class="rank"><tr><th>Rank</th><th>Strategy</th><th>Expiry</th><th>Net ₹/lot</th>'
-            '<th>Costs</th><th>EV (20d vol)</th><th>EV (5d vol)</th><th>P(profit)</th><th>Risk</th>'
-            f'<th>EV / risk</th></tr>{rank_rows}</table></div>'
-            f'<p class="notes">Ranked by expected P&amp;L after {c["broker"]} charges (₹{c["brokerage_per_lot_per_order"]:.0f}/lot/order, '
+            '<th>Costs</th><th>Max loss after costs</th><th>Payoff ratio</th><th>Record (n · expectancy)</th>'
+            f'<th>Win rate</th><th>Ranked by</th></tr>{rank_rows}</table></div>'
+            f'<p class="notes">All figures use real data: today\'s Dhan prices, {c["broker"]} charges (₹{c["brokerage_per_lot_per_order"]:.0f}/lot/order, '
             f'STT {c["stt_sell_pct"]}% sell, exchange {c["exchange_pct"]}%, SEBI {c["sebi_pct"]}%, stamp {c["stamp_buy_pct"]}% buy, '
             f'GST {c["gst_pct"]:.0f}%, {c["orders_per_leg"]} order(s) per leg) and slippage '
             f'(max of {c["slippage_min_ticks"]} tick or {c["slippage_pct"]}% of premium per order, ×2 below '
-            f'{c["liquid_oi_lots"]:,} lots OI, ×4 below {c["thin_oi_lots"]:,}), divided by the capital at risk. '
-            f'EV assumes NIFTY moves at its 20-day realised vol ({sigma*100:.1f}%) to the first expiry; '
-            'the 5-day column shows the same with recent, higher vol. Prices are last trades, not quotes; '
-            'margin and events are not modelled. These are ideas to check, not advice.</p>'
+            f'{c["liquid_oi_lots"]:,} lots OI, ×4 below {c["thin_oi_lots"]:,}). Ideas are ranked by the strategy '
+            'family\'s real track record (expectancy per ₹ of risk) from your backtest or the forward record; '
+            'until a family has enough closed trades, by its payoff ratio (max profit ÷ max loss after costs). '
+            'Nothing is simulated. Prices are last trades, not quotes. These are ideas to check, not advice.</p>'
             f'<div class="ideas">{"".join(cards)}</div></section>')
     lv = {"action": "bad", "warn": "warn", "info": "good"}
     blocks = []
@@ -623,11 +637,11 @@ After costs: max profit {_rs(mp)} · max loss {_rs(ml)} · breakeven {be}<br>
     log_rows = "".join(
         f"<tr{' class=\'bestrow\'' if s['best'] else ''}><td>{s['id']}</td><td>{s['date']} {s['time']}</td>"
         f"<td>{s['name']}</td><td>{s['expiry']}</td><td>{s['fit']}</td><td>{_rs(s['net'])}</td>"
-        f"<td>{_rs(s['ev'])}</td><td>{s['exit']['exit_date']}</td>"
+        f"<td>{_paper_txt(s.get('paper'))}</td><td>{s['exit']['exit_date']}</td>"
         f"<td>{'Tracking' if s['id'] in taken else 'Best' if s['best'] else '—'}</td></tr>" for s in recent)
     html += f"""<section><h2>Tracked trades</h2>{tracked_html}</section>
 <section><h2>Suggestion log</h2><div class="wrap"><table class="rank"><tr><th>ID</th><th>Logged</th>
-<th>Strategy</th><th>Expiry</th><th>Fit</th><th>Net ₹/lot</th><th>EV after costs</th><th>Exit by</th>
+<th>Strategy</th><th>Expiry</th><th>Gate</th><th>Net ₹/lot</th><th>Forward P&amp;L (real prices)</th><th>Exit by</th>
 <th>Status</th></tr>{log_rows}</table></div>
 <p class="notes">Every idea is logged with its prices and exit plan in logs/suggestions.jsonl. Only suggestions
 you actually take are monitored.</p></section>"""
@@ -638,9 +652,8 @@ def _dd_line(t):
     dd = t.get("dd")
     if not dd:
         return ""
-    return (f"<p class='figs'>From here to {t['exit']['exit_date']} ({dd['days']} trading days): expected max "
-            f"drawdown {_rs(dd['mean'])}, worst 5% {_rs(dd['p95'])}, chance of hitting the stop "
-            f"{dd.get('p_stop', 0)*100:.0f}%.</p>")
+    return (f"<p class='figs'>Realised so far ({dd['checks']} check(s) since {dd['since']}): max drawdown "
+            f"{_rs(dd['realised'])}, worst P&amp;L {_rs(dd['worst'])}.</p>")
 
 
 def _levels(t):
@@ -687,31 +700,32 @@ def write_workbook(path, now, S, summary, rv, table, ideas, tracked, log, costs,
         ws.append([k, round(v * 100, 2)])
 
     ws = wb.create_sheet("Strategies")
-    ws.append(["Rank", "Best", "Fit", "Strategy", "Expiry", "View", "Net ₹/lot (+credit)",
-               "Brokerage", "STT", "Exchange+SEBI", "Stamp", "GST", "Slippage", "Total cost",
-               "Net after costs", "EV after costs (20d vol)", "EV after costs (5d vol)", "P(profit)",
-               "Risk ₹", "EV / risk", "Max profit after costs", "Max loss after costs",
-               "Breakevens after costs", "Delta", "Gamma", "Theta ₹/day", "Vega ₹/pt", "Legs", "Reasons",
-               "Take profit", "Stop loss", "Exit by date", "Time exit",
-               "Exp. max drawdown ₹", "Worst-5% drawdown ₹", "P(stop hit)", "Gate", "Gate notes"])
+    ws.append(["Rank", "Pick", "Gate", "Strategy", "Expiry", "View", "Net ₹/lot (+credit)",
+               "Brokerage", "STT", "Exchange+SEBI", "Stamp", "GST", "Slippage (est.)", "Total cost",
+               "Net after costs", "Max profit after costs", "Max loss after costs", "Payoff ratio",
+               "Breakevens after costs", "Record source", "Record trades", "Win rate", "Expectancy ₹/lot",
+               "Median max drawdown ₹", "Worst max drawdown ₹", "Stop-hit rate", "Ranked by",
+               "Delta", "Gamma", "Theta ₹/day", "Vega ₹/pt", "Legs", "Reasons",
+               "Take profit", "Stop loss", "Exit by date", "Gate notes"])
     for n, i in enumerate(ideas, 1):
         e = i["eval"]
         ch = e["charges"]
-        ws.append([n, "BEST" if i["best"] else "", i["fit"], i["name"], i["expiry"], i["view"],
-                   round(i["net"]), round(ch["brokerage"]), round(ch["stt"], 2),
+        h = e["hist"] or {}
+        ws.append([n, "PICK" if i["best"] else "", "pass" if i["gate"]["pass"] else "fail", i["name"],
+                   i["expiry"], i["view"], round(i["net"]), round(ch["brokerage"]), round(ch["stt"], 2),
                    round(ch["exchange"] + ch["sebi"], 2), round(ch["stamp"], 2), round(ch["gst"], 2),
-                   round(e["slippage"]), round(e["cost"]), round(e["net_after"]), round(e["ev"]),
-                   _xl(e.get("ev_alt")), round(e["pop"], 3), round(e["risk"]), round(e["ev_on_risk"], 4),
-                   _xl(e.get("max_profit_after", i.get("max_profit"))),
-                   _xl(e.get("max_loss_after", i.get("max_loss"))),
-                   ", ".join(f"{b:,.0f}" for b in e.get("breakevens_after") or i.get("breakevens") or []),
-                   round(i["delta"], 1), round(i["gamma"], 4), round(i["theta"]), round(i["vega"]),
+                   round(e["slippage"]), round(e["cost"]), round(e["net_after"]),
+                   _xl(e.get("max_profit_after")), _xl(e.get("max_loss_after")),
+                   None if e["payoff_ratio"] is None else round(e["payoff_ratio"], 3),
+                   ", ".join(f"{b:,.0f}" for b in e.get("breakevens_after") or []),
+                   h.get("source", "none yet"), h.get("n"), h.get("win_rate"), _xl(h.get("expectancy")),
+                   _xl(h.get("max_dd_median")), _xl(h.get("max_dd_worst")), h.get("stop_rate"),
+                   e["score_basis"], round(i["delta"], 1), round(i["gamma"], 4), round(i["theta"]),
+                   round(i["vega"]),
                    "; ".join(f"{'Buy' if l['lots'] > 0 else 'Sell'} {l['strike']:.0f}{l['type']} @ {l['price']}"
                              for l in i["legs"]),
-                   " ".join(i["reasons"]), i["exit"]["take_profit"], i["exit"]["stop_loss"],
-                   i["exit"]["exit_date"], i["exit"]["time_exit"],
-                   round(i["dd"]["mean"]), round(i["dd"]["p95"]), round(i["dd"].get("p_stop", 0), 3),
-                   "pass" if i["gate"]["pass"] else "fail", "; ".join(i["gate"]["notes"])])
+                   " ".join(re.sub("<[^>]+>", "", r) for r in i["reasons"]), i["exit"]["take_profit"],
+                   i["exit"]["stop_loss"], i["exit"]["exit_date"], "; ".join(i["gate"]["notes"])])
 
     ws = wb.create_sheet("Greeks")
     ws.append(["Expiry", "Strike", "IV %", "CE LTP", "CE OI lots", "CE delta", "CE gamma",
@@ -741,11 +755,12 @@ def write_workbook(path, now, S, summary, rv, table, ideas, tracked, log, costs,
                    round(snap["pnl"]), round(snap["delta"]), snap["time"], snap["spot"],
                    t["exit"]["exit_date"], " | ".join(f"{a['kind']}: {a['msg']}" for a in alerts)])
     ws = wb.create_sheet("Suggestion log")
-    ws.append(["ID", "Date", "Time", "Spot", "Strategy", "Expiry", "Fit", "Best", "Net ₹/lot",
-               "Cost ₹", "EV ₹", "Exit by", "Take profit", "Stop loss", "Legs"])
+    ws.append(["ID", "Date", "Time", "Spot", "Strategy", "Expiry", "Gate", "Pick", "Net ₹/lot",
+               "Cost ₹", "Forward P&L (real prices)", "Exit by", "Take profit", "Stop loss", "Legs"])
     for s_ in sorted(log, key=lambda s: s["id"], reverse=True):
         ws.append([s_["id"], s_["date"], s_["time"], s_["spot"], s_["name"], s_["expiry"], s_["fit"],
-                   "BEST" if s_["best"] else "", s_["net"], s_["cost"], s_["ev"], s_["exit"]["exit_date"],
+                   "PICK" if s_["best"] else "", s_["net"], s_["cost"], _paper_txt(s_.get("paper"), html=False),
+                   s_["exit"]["exit_date"],
                    s_["exit"]["take_profit"], s_["exit"]["stop_loss"],
                    "; ".join(f"{'Buy' if l['lots'] > 0 else 'Sell'} {l['expiry']} {l['strike']:.0f}{l['type']} @ {l['price']}"
                              for l in s_["legs"])])
