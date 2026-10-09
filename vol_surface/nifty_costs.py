@@ -174,3 +174,36 @@ def rank(ideas, S, sigma, c, alt_sigma=None):
     for i in ideas:
         i["best"] = i is best
     return best
+
+
+def drawdown(legs, S, sigma, exit_date, today, cost=0.0, stop_loss=None, n=4000, seed=11):
+    """Expected maximum drawdown of a position marked to market daily until `exit_date`.
+
+    Spot follows a driftless lognormal walk at `sigma` (one step per trading day); each leg
+    is revalued with Black-76 at its current IV. P&L starts at minus the round-trip costs.
+    Returns mean and 95th-percentile peak-to-trough drawdown (₹, positive numbers), the
+    worst P&L on the way, and the chance the path touches `stop_loss` (₹ P&L, negative).
+    """
+    days = max(int(np.busday_count(today.isoformat(), exit_date)), 1)
+    T1 = min(l["T"] for l in legs)
+    dT = min(T1, days * 365 / 252 / 365) / days          # calendar time per trading day (years)
+    rng = np.random.default_rng(seed)
+    z = rng.standard_normal((n, days))
+    step = sigma * math.sqrt(1 / 252)
+    logS = np.cumsum(-0.5 * step * step + step * z, axis=1)
+    pnl = np.full((n, days + 1), -cost)
+    for k in range(1, days + 1):
+        Sk = S * np.exp(logS[:, k - 1])
+        tot = np.zeros(n)
+        for l in legs:
+            Fk = l["F"] * Sk / S
+            v = _b76(Fk, l["strike"], max(l["T"] - k * dT, 0.0), l["iv"], l["type"] == "CE")
+            tot += l["lots"] * (v - l["price"]) * LOT
+        pnl[:, k] = tot - cost
+    peak = np.maximum.accumulate(np.concatenate([np.zeros((n, 1)), pnl], axis=1), axis=1)[:, 1:]
+    mdd = (peak - pnl).max(axis=1)
+    out = dict(days=days, mean=float(mdd.mean()), p95=float(np.percentile(mdd, 95)),
+               worst_pnl_median=float(np.median(pnl.min(axis=1))), sigma=sigma)
+    if stop_loss is not None:
+        out["p_stop"] = float((pnl.min(axis=1) <= stop_loss).mean())
+    return out

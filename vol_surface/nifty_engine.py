@@ -288,8 +288,14 @@ def decide(cands, reg, edge, gex, S, rules, events_today=False):
     if near_flip:
         passing = []
     best = max(passing, key=lambda c: c["eval"]["ev_on_risk"]) if passing else None
-    return dict(trade=best, matrix=matrix, budget=budget, near_flip=near_flip,
-                label=(best["name"] if best else "NO TRADE"))
+    override = False
+    if best is None and rules.get("ignore_gate", False) and cands:
+        # gate failed: still name the best candidate, preferring the family the regime calls for
+        pool = [c for c in cands if c["family"] in allowed] or cands
+        best = max(pool, key=lambda c: c["eval"]["ev_on_risk"])
+        override = True
+    return dict(trade=best, matrix=matrix, budget=budget, near_flip=near_flip, override=override,
+                label=(best["name"] + (" (gate failed)" if override else "") if best else "NO TRADE"))
 
 
 # ----------------------------------------------------------- prediction log

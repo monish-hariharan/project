@@ -16,6 +16,7 @@ Per-lot figures multiply by the lot size (65).
 from __future__ import annotations
 
 import argparse
+import re
 import csv
 import math
 from datetime import datetime
@@ -24,7 +25,7 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import norm
 
-from nifty_costs import load_costs, rank
+from nifty_costs import drawdown, load_costs, rank
 import nifty_engine as eng
 from nifty_risk import exit_plan, load_rules
 from nifty_strategies import load_positions, suggest
@@ -238,6 +239,10 @@ def main():
         i["exit"] = exit_plan(i, rules, now.date())
         i["reasons"] = _engine_reasons(i, reg, edge, rb, gex, S)
         i["fit"] = "Pass" if i["gate"]["pass"] else "Fail"
+        x = i["exit"]
+        stop_pnl = (i["net"] - x["sl_close_cost"]) if x["kind"] == "credit" else (x["sl_value"] + i["net"])
+        i["dd"] = drawdown(i["legs"], S, vf["forecast"], x["exit_date"], now.date(),
+                           cost=i["eval"]["cost"], stop_loss=stop_pnl - i["eval"]["cost"])
     ideas.sort(key=lambda i: (not i["best"], not i["gate"]["pass"], -i["eval"]["ev_on_risk"]))
     best = decision["trade"]
     plog = Path(a.log_dir) / "predictions.jsonl"
@@ -251,16 +256,34 @@ def main():
     started = match_positions(load_positions(a.positions), now, a.log_dir) if a.positions else []
     tracked = monitor(table, summary, S, now, rules, a.log_dir, only_new=False)
     log = read_suggestions(a.log_dir)
+    rows_by = {(r["expiry"], r["strike"]): r for r in table}
+    for t, snap, alerts, _ in tracked:
+        legs_now = []
+        for l in t["legs"]:
+            r = rows_by.get((l["expiry"], l["strike"]))
+            if r is None:
+                break
+            side = "ce" if l["type"] == "CE" else "pe"
+            legs_now.append(dict(l, price=r[f"{side}_ltp"], iv=r["iv"], F=r["forward"], T=r["days"] / 365))
+        else:
+            x, m = t["exit"], t["multiplier"]
+            value = snap["value"]
+            stop = (-(x["sl_close_cost"] * m - (-value)) if x["kind"] == "credit"
+                    else (x["sl_value"] * m - value))
+            t["dd"] = drawdown(legs_now, S, vf["forecast"], x["exit_date"], now.date(), 0.0, stop)
 
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     tag = now.strftime("%Y-%m-%d")
     write_tables(out, tag, table, summary)
-    extra = engine_section(engine, S, summary) + extra_sections(ideas, tracked, log, best, costs)
+    limits = limitations(engine, ideas, costs, nifty)
+    extra = (engine_section(engine, S, summary) + extra_sections(ideas, tracked, log, best, costs)
+             + "<section><h2>Limitations of these recommendations</h2><ol class='limits'>"
+             + "".join(f"<li>{x}</li>" for x in limits) + "</ol></section>")
     html = write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary,
                            d, c, ret, rv, today, a.page, extra, engine_figs(engine, S))
     xlsx = write_workbook(out / "download" / f"nifty_dashboard_{tag}.xlsx", now, S, summary,
-                          rv, table, ideas, tracked, log, costs)
+                          rv, table, ideas, tracked, log, costs, limits)
     for i in ideas:
         e = i["eval"]
         print(f"{'BEST ' if i['best'] else '     '}[{i['fit']}] {i['name']} {i['expiry']}: "
@@ -320,7 +343,7 @@ def _tile(title, value, cls, detail):
 def engine_section(en, S, summary):
     d, reg, edge, gex, rb = en["decision"], en["reg"], en["edge"], en["gex"], en["rb"]
     trade = d["trade"]
-    gate_val = "Pass" if trade else "Fail"
+    gate_val = "Fail (advisory)" if d.get("override") else "Pass" if trade else "Fail"
     tiles = "".join([
         _tile("Forecast regime", reg["label"] + (f" ({reg['direction']})" if reg["direction"] else ""),
               "warn" if reg["label"] == "Mixed" else "good",
@@ -330,16 +353,23 @@ def engine_section(en, S, summary):
         _tile("Positioning", f"{gex['regime'].title()} GEX", "warn",
               (f"flip {gex['flip']:,.0f} · " if gex['flip'] else "") +
               f"PCR {en['pm_target']['pcr']:.2f} · max pain {en['pm_target']['max_pain']:,.0f}"),
-        _tile("Risk gate", gate_val, "good" if trade else "bad",
+        _tile("Risk gate", gate_val, "bad" if (d.get("override") or not trade) else "good",
               f"budget ₹{d['budget']:,.0f} ({en['rules']['risk_pct']}% of ₹{en['rules']['capital']:,.0f})"),
     ])
     if trade:
         g, e, x = trade["gate"], trade["eval"], trade["exit"]
         legs = "; ".join(f"{'buy' if l['lots'] > 0 else 'sell'} {l['strike']:.0f} {l['type']} @ {l['price']:.2f}"
                          for l in trade["legs"])
-        final = (f"<p class='decision good'><b>{trade['name']} — {trade['expiry']}</b> ({trade.get('id', '')}): "
-                 f"{legs}. Size {g['lots']} lot(s). EV after costs {_rs(e['ev'])}/lot, max loss "
-                 f"{_rs(-g['max_loss'])}/lot. Invalidation: {x['stop_loss']}. Exit by {x['exit_date']}.</p>")
+        dd = trade["dd"]
+        warn = ""
+        if d.get("override"):
+            warn = (" <span class='pill warn'>Gate failed</span> Shown because the gate is set to advisory "
+                    "(ignore_gate): " + "; ".join(g["notes"]) + ".")
+        final = (f"<p class='decision {'warn' if d.get('override') else 'good'}'><b>{trade['name']} — {trade['expiry']}</b> "
+                 f"({trade.get('id', '')}): {legs}. Size {max(g['lots'], 1)} lot(s). EV after costs {_rs(e['ev'])}/lot, "
+                 f"max loss {_rs(-g['max_loss'])}/lot, expected max drawdown {_rs(dd['mean'])} "
+                 f"(worst 5%: {_rs(dd['p95'])}) over {dd['days']} trading days, chance of hitting the stop "
+                 f"{dd.get('p_stop', 0)*100:.0f}%. Invalidation: {x['stop_loss']}. Exit by {x['exit_date']}.{warn}</p>")
     else:
         final = "<p class='decision bad'><b>NO TRADE.</b> No candidate passes every gate today.</p>"
     matrix = "".join(f"<li>{m}</li>" for m in d["matrix"])
@@ -399,6 +429,52 @@ def engine_section(en, S, summary):
 <section><h2>Volatility edge</h2>{volp}</section>
 <section><h2>Positioning</h2>{pos}</section>
 <section><h2>Prediction log</h2>{score}</section>"""
+
+
+def limitations(en, ideas, c, nifty):
+    """Plain-language limits on today's recommendations; data-dependent items first."""
+    n = len(nifty["close"])
+    rb = en["rb"]
+    out = []
+    if en["decision"].get("override"):
+        out.append("<b>Today's recommendation failed the risk gate</b> (" +
+                   "; ".join(en["decision"]["trade"]["gate"]["notes"]) +
+                   ") and is shown only because the gate is set to advisory. Treat it as the least-bad "
+                   "candidate, not as a trade with a measured edge.")
+    out += [
+        f"<b>Short history.</b> The range model, realised-vol forecast and drawdown inputs rest on {n} daily "
+        "sessions (the Dhan connector returns history 5 candles at a time). Coverage and VRP estimates "
+        f"{'(' + str(rb['by'][0]['n']) + ' sessions) ' if rb else ''}have wide error bars, and 13 weeks cover one market regime.",
+        "<b>No historical option data, so no strategy backtest.</b> Expected value, drawdown and stop "
+        "probabilities come from a simulation, not from how these trades actually performed. The "
+        "prediction log builds a real out-of-sample record from now on.",
+        "<b>Model, not market, distribution.</b> Simulations use a driftless lognormal walk at the forecast "
+        f"realised vol ({en['vf']['forecast']*100:.1f}%) with constant IV. Real NIFTY returns have fat tails, "
+        "overnight gaps and volatility that rises when the market falls, so true drawdowns and stop-outs are "
+        "likely larger than shown, especially for short-premium trades.",
+        "<b>Drawdown is peak-to-trough.</b> Expected max drawdown counts open profit given back, so it can "
+        "exceed the trade's maximum loss; it is a simulated average, not a cap.",
+        "<b>IV held constant.</b> Mark-to-market assumes each leg keeps today's IV. A volatility spike widens "
+        "losses on short options (iron condors) and helps long options, even if spot does not move.",
+        "<b>Prices are last trades, not quotes.</b> The chain gives LTP and OI only, no bid/ask. Fills can "
+        f"differ; slippage is an estimate ({c['slippage_pct']}% of premium or {c['slippage_min_ticks']} tick per "
+        "order, more for thin strikes), not measured.",
+        "<b>Stops are checked hourly at best.</b> Monitoring runs once an hour in market hours, and a stop "
+        "price does not guarantee the exit price. Gaps and fast markets can exit well beyond the stop. Keep "
+        "broker-side stop orders.",
+        "<b>GEX sign is an assumption.</b> Open interest does not show who is long or short; the gamma flip "
+        "and GEX regime use a calls-positive / puts-negative convention and have not been tested for "
+        "predictive value.",
+        "<b>Fixed thresholds.</b> Rich/cheap ratios, regime cut-offs, short deltas, wing widths and exit "
+        "rules in rules.json are reasonable defaults, not optimised or validated values.",
+        "<b>Not modelled:</b> margin requirements and margin calls, events (RBI policy, budget, results, "
+        "global shocks) unless listed in event_dates, early assignment, exercise settlement details beyond "
+        "STT, leg risk when orders fill one at a time, and taxes on profits.",
+        "<b>Position size uses a placeholder budget</b> (capital × risk % in rules.json) until you set your own.",
+        "<b>Exit dates skip weekends but not NSE holidays.</b> Check an exit date that falls on a holiday.",
+        "These are model outputs for research and education, not investment advice.",
+    ]
+    return out
 
 
 def engine_figs(en, S):
@@ -485,7 +561,9 @@ def extra_sections(ideas, tracked, log, best, c):
 <p class="figs">{net} per lot before costs · {_rs(e['net_after'])} after costs<br>
 After costs: max profit {_rs(mp)} · max loss {_rs(ml)} · breakeven {be}<br>
 Δ {i['delta']:+.1f} · Γ {i['gamma']:+.3f} · Θ {_rs(i['theta'])}/day · vega {_rs(i['vega'])}/vol-pt (per lot)</p>
-{ev_html}<div class="exit"><b>Exit plan</b><ul>
+{ev_html}<p class="figs">Expected max drawdown {_rs(i['dd']['mean'])} · worst 5% {_rs(i['dd']['p95'])}
+· over {i['dd']['days']} trading days to {i['exit']['exit_date']} · P(stop hit) {i['dd'].get('p_stop', 0)*100:.0f}%</p>
+<div class="exit"><b>Exit plan</b><ul>
 <li><span class="tag">Take profit</span> {i['exit']['take_profit']}</li>
 <li><span class="tag">Stop loss</span> {i['exit']['stop_loss']}</li>
 <li><span class="tag">Exit by</span> {i['exit']['time_exit']}</li></ul></div>
@@ -534,7 +612,7 @@ After costs: max profit {_rs(mp)} · max loss {_rs(ml)} · breakeven {be}<br>
 <span class="muted id">{t['id']} · taken {t['taken']} ({t['source']})</span></header>
 <p class="figs {'up' if snap['pnl'] >= 0 else 'down'}">P&amp;L {_rs(snap['pnl'])} · entry {'credit' if t['entry_net'] > 0 else 'debit'} {_rs(abs(t['entry_net']))}
 · net Δ {snap['delta']:+.0f} · checked {snap['time']} at spot {snap['spot']:,.2f}</p>
-{al}<div class="wrap"><table><tr><th>Leg</th><th>Expiry</th><th>Strike</th><th>Entry</th><th>Now</th></tr>{legs}</table></div>
+{al}{_dd_line(t)}<div class="wrap"><table><tr><th>Leg</th><th>Expiry</th><th>Strike</th><th>Entry</th><th>Now</th></tr>{legs}</table></div>
 <p class="figs">{_levels(t)}</p></article>""")
     tracked_html = ("<div class='ideas'>" + "".join(blocks) + "</div>") if blocks else (
         "<p class='notes'>None of the logged suggestions is being tracked. When you enter one, it is "
@@ -554,6 +632,15 @@ After costs: max profit {_rs(mp)} · max loss {_rs(ml)} · breakeven {be}<br>
 <p class="notes">Every idea is logged with its prices and exit plan in logs/suggestions.jsonl. Only suggestions
 you actually take are monitored.</p></section>"""
     return html
+
+
+def _dd_line(t):
+    dd = t.get("dd")
+    if not dd:
+        return ""
+    return (f"<p class='figs'>From here to {t['exit']['exit_date']} ({dd['days']} trading days): expected max "
+            f"drawdown {_rs(dd['mean'])}, worst 5% {_rs(dd['p95'])}, chance of hitting the stop "
+            f"{dd.get('p_stop', 0)*100:.0f}%.</p>")
 
 
 def _levels(t):
@@ -577,7 +664,7 @@ def _xl(v):
     return None if v is None else "unlimited" if math.isinf(v) else round(v)
 
 
-def write_workbook(path, now, S, summary, rv, table, ideas, tracked, log, costs):
+def write_workbook(path, now, S, summary, rv, table, ideas, tracked, log, costs, limits=()):
     from openpyxl import Workbook
     from openpyxl.styles import Font
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -605,7 +692,8 @@ def write_workbook(path, now, S, summary, rv, table, ideas, tracked, log, costs)
                "Net after costs", "EV after costs (20d vol)", "EV after costs (5d vol)", "P(profit)",
                "Risk ₹", "EV / risk", "Max profit after costs", "Max loss after costs",
                "Breakevens after costs", "Delta", "Gamma", "Theta ₹/day", "Vega ₹/pt", "Legs", "Reasons",
-               "Take profit", "Stop loss", "Exit by date", "Time exit"])
+               "Take profit", "Stop loss", "Exit by date", "Time exit",
+               "Exp. max drawdown ₹", "Worst-5% drawdown ₹", "P(stop hit)", "Gate", "Gate notes"])
     for n, i in enumerate(ideas, 1):
         e = i["eval"]
         ch = e["charges"]
@@ -621,7 +709,9 @@ def write_workbook(path, now, S, summary, rv, table, ideas, tracked, log, costs)
                    "; ".join(f"{'Buy' if l['lots'] > 0 else 'Sell'} {l['strike']:.0f}{l['type']} @ {l['price']}"
                              for l in i["legs"]),
                    " ".join(i["reasons"]), i["exit"]["take_profit"], i["exit"]["stop_loss"],
-                   i["exit"]["exit_date"], i["exit"]["time_exit"]])
+                   i["exit"]["exit_date"], i["exit"]["time_exit"],
+                   round(i["dd"]["mean"]), round(i["dd"]["p95"]), round(i["dd"].get("p_stop", 0), 3),
+                   "pass" if i["gate"]["pass"] else "fail", "; ".join(i["gate"]["notes"])])
 
     ws = wb.create_sheet("Greeks")
     ws.append(["Expiry", "Strike", "IV %", "CE LTP", "CE OI lots", "CE delta", "CE gamma",
@@ -633,6 +723,11 @@ def write_workbook(path, now, S, summary, rv, table, ideas, tracked, log, costs)
                    round(r["ce_vega"], 2), r["pe_ltp"], r["pe_oi"], round(r["pe_delta"], 4),
                    round(r["pe_gamma"], 6), round(r["pe_theta"], 2), round(r["pe_vega"], 2)])
 
+    ws = wb.create_sheet("Limitations", 1)
+    ws.append(["#", "Limitation"])
+    for n, x in enumerate(limits, 1):
+        ws.append([n, re.sub("<[^>]+>", "", x)])
+    ws.column_dimensions["B"].width = 140
     ws = wb.create_sheet("Costs")
     ws.append(["Setting", "Value"])
     for k, v in costs.items():
@@ -888,7 +983,8 @@ tr.bestrow td {{ font-weight: 600; color: var(--accent) }}
 .tile {{ background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px; display: grid; gap: 2px; min-width: 0 }}
 .tile b {{ font-size: 20px }} .tile b.good {{ color: var(--up) }} .tile b.bad {{ color: var(--down) }} .tile b.warn {{ color: var(--warn) }}
 .decision {{ border: 1px solid var(--rule); border-left: 4px solid var(--rule); border-radius: 6px; padding: 10px 12px; background: var(--surface); max-width: 110ch }}
-.decision.good {{ border-left-color: var(--up) }} .decision.bad {{ border-left-color: var(--down) }}
+.decision.good {{ border-left-color: var(--up) }} .decision.bad {{ border-left-color: var(--down) }} .decision.warn {{ border-left-color: var(--warn) }}
+.limits li {{ margin-bottom: 4px; max-width: 110ch }}
 .matrix {{ margin: 6px 0 0; padding-left: 18px; color: var(--muted) }}
 .exit ul {{ margin: 4px 0; padding-left: 0; list-style: none }}
 .tag {{ display: inline-block; min-width: 84px; font-family: var(--mono); font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em }}
