@@ -117,7 +117,8 @@ def mid_price(leg: dict) -> float | None:
     if bid > 0 and ask > 0 and ask >= bid and (ask - bid) <= 0.5 * ask:
         return 0.5 * (bid + ask)
     ltp = leg.get("last_price") or 0
-    return ltp if ltp > 0 else None
+    # without a two-sided quote, trust the LTP only if the contract has open interest
+    return ltp if ltp > 0 and (leg.get("oi") or 0) > 0 else None
 
 
 def time_to_expiry(expiry: str, now: datetime) -> float:
@@ -144,7 +145,7 @@ def implied_forward(oc: dict, spot: float, T: float, df: float) -> float:
         K = float(ks)
         c, p = legs.get("ce") or {}, legs.get("pe") or {}
         cm, pm = mid_price(c), mid_price(p)
-        if cm and pm:
+        if cm and pm and (c.get("oi") or 0) > 0 and (p.get("oi") or 0) > 0:
             rows.append((abs(K - spot), K + (cm - pm) / df))
     if not rows:
         return spot / df
@@ -333,6 +334,20 @@ def demo_chains(now: datetime, n: int):
     return chains
 
 
+def load_csv(path: str, spot: float) -> dict:
+    """Read a saved snapshot into Dhan's option-chain response shape."""
+    chains: dict = {}
+    with open(path) as f:
+        rows = csv.reader(line for line in f if not line.startswith("#"))
+        for e, k, cl, co, pl, po in rows:
+            oc = chains.setdefault(e, {"last_price": spot, "oc": {}})["oc"]
+            oc[f"{float(k):.6f}"] = {
+                "ce": {"last_price": float(cl), "oi": int(co)},
+                "pe": {"last_price": float(pl), "oi": int(po)},
+            }
+    return chains
+
+
 # -------------------------------------------------------------------------- main
 
 def main():
@@ -344,10 +359,20 @@ def main():
                     help="max |ln(K/F)| kept (default 0.10 ≈ ±10%%)")
     ap.add_argument("--out", default="output")
     ap.add_argument("--demo", action="store_true", help="use synthetic data, no API call")
+    ap.add_argument("--csv", help="load a saved chain snapshot instead of calling the API "
+                                  "(columns: expiry,strike,ce_ltp,ce_oi,pe_ltp,pe_oi)")
+    ap.add_argument("--spot", type=float, help="underlying spot (required with --csv)")
+    ap.add_argument("--asof", help="snapshot time, 'YYYY-MM-DD HH:MM' IST (with --csv)")
     a = ap.parse_args()
 
     now = datetime.now(IST)
-    if a.demo:
+    if a.asof:
+        now = datetime.strptime(a.asof, "%Y-%m-%d %H:%M").replace(tzinfo=IST)
+    if a.csv:
+        if not a.spot:
+            sys.exit("--spot is required with --csv")
+        chains = load_csv(a.csv, a.spot)
+    elif a.demo:
         chains = demo_chains(now, a.expiries)
     else:
         cid, tok = os.environ.get("DHAN_CLIENT_ID"), os.environ.get("DHAN_ACCESS_TOKEN")
@@ -371,7 +396,7 @@ def main():
     k_grid, T_grid, IV, _, _ = build_grid(points)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    tag = now.strftime("%Y-%m-%d") + ("_demo" if a.demo else "")
+    tag = now.strftime("%Y-%m-%d") + ("_demo" if a.demo and not a.csv else "")
     write_csvs(out, tag, points, k_grid, T_grid, IV, spot)
     html = write_html(out, tag, points, k_grid, T_grid, IV, spot, now)
     atm = IV[0, np.argmin(np.abs(k_grid))] * 100
