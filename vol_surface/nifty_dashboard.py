@@ -217,6 +217,8 @@ def write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary
     from plotly.subplots import make_subplots
 
     expiries = [s["expiry"] for s in summary]
+    palette = ["#4c78a8", "#f58518", "#e45756", "#54a24b", "#b279a2", "#9d755d"]
+    colour = {e: palette[i % len(palette)] for i, e in enumerate(expiries)}
     figs = []
 
     # 1. surface
@@ -240,6 +242,7 @@ def write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary
         for (rr, cc), y in zip([(1, 1), (1, 2), (2, 1), (2, 2)],
                                [val("delta"), val("gamma"), val("theta", LOT), val("vega", LOT)]):
             f.add_trace(go.Scatter(x=x, y=y, mode="lines", name=e, legendgroup=e,
+                                   line=dict(color=colour[e]),
                                    showlegend=(rr, cc) == (1, 1)), row=rr, col=cc)
     f.update_layout(title="Greeks by strike (Black-76, each strike's own IV)", height=700)
     f.update_xaxes(title_text="Strike")
@@ -251,9 +254,11 @@ def write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary
     for e in expiries:
         rows = [r for r in table if r["expiry"] == e]
         f.add_trace(go.Bar(x=[r["strike"] for r in rows],
-                           y=[r["ce_oi"] + r["pe_oi"] for r in rows], name=e), row=1, col=1)
+                           y=[r["ce_oi"] + r["pe_oi"] for r in rows], name=e,
+                           marker_color=colour[e]), row=1, col=1)
     f.add_trace(go.Bar(x=expiries, y=[s["oi_near_lots"] for s in summary], showlegend=False,
-                       marker_color="#888"), row=1, col=2)
+                       marker_color=[colour[e] for e in expiries]), row=1, col=2)
+    f.update_xaxes(type="category", row=1, col=2)
     f.update_layout(title="Liquidity (open interest; Dhan chain did not return volume or bid/ask)",
                     barmode="group", height=450)
     figs.append(f)
@@ -323,7 +328,7 @@ def write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary
     page = f"""<title>NIFTY Options Desk</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.35.2/plotly.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@4.1.1/plotly.min.js"></script>
 <style>
 /* Layout: one reading column, summary tables first, charts below, each table scrolls inside itself */
 :root {{
@@ -363,7 +368,9 @@ td:first-child, th:first-child {{ text-align: left; font-family: var(--mono) }}
 {today_html.replace('<p>', '<p class="today">')}
 <section><h2>Expiry summary</h2><div class="wrap">{sm_tbl}</div></section>
 <section><h2>Realised volatility, last {len(closes)} sessions</h2><div class="wrap">{rv_tbl}</div></section>
+<p class="notes" id="nolib" hidden>The charting library did not load, so the charts below are empty. The tables above are complete.</p>
 {body}
+<script>if (!window.Plotly) document.getElementById("nolib").hidden = false;</script>
 <p class="notes">Source: Dhan API v2 option chain (last traded price, open interest) and daily candles.
 Greeks: Black-76 on the put-call-parity forward, lot size {LOT}; theta is one calendar day of decay.
 Implied move = ATM straddle / spot. RV20 move = 20-day close-to-close vol × √(trading days/252) × √(2/π).
