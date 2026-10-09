@@ -230,6 +230,33 @@ def write_dashboard(out, tag, now, S, points, k_grid, T_grid, IV, table, summary
                                camera=dict(eye=dict(x=1.6, y=-1.6, z=0.8))))
     figs.append(f)
 
+    # 1b. smile by expiry + ATM term structure
+    f = make_subplots(rows=1, cols=2, column_widths=[0.6, 0.4],
+                      subplot_titles=("Smile by expiry", "ATM term structure"))
+    for e in expiries:
+        ps = [p for p in points if p.expiry == e]
+        f.add_trace(go.Scatter(
+            x=[p.strike for p in ps], y=[p.iv * 100 for p in ps], mode="lines+markers",
+            name=f"{e} ({ps[0].T*365:.1f}d)", line=dict(color=colour[e]), marker=dict(size=4),
+            hovertemplate="K %{x:.0f}<br>IV %{y:.2f}%<extra>" + e + "</extra>"), row=1, col=1)
+    f.add_shape(type="line", x0=S, x1=S, y0=0, y1=1, xref="x", yref="y domain",
+                line=dict(dash="dot", color="#8a919c"))
+    f.add_annotation(x=S, y=0.98, xref="x", yref="y domain", text=f" spot {S:,.0f}",
+                     showarrow=False, xanchor="left", yanchor="top", font=dict(size=11))
+    f.add_trace(go.Scatter(
+        x=[s["days"] for s in summary], y=[s["atm_iv"] * 100 for s in summary],
+        mode="lines+markers", name="ATM IV", showlegend=False,
+        line=dict(color="#8a919c"), marker=dict(size=9, color=[colour[e] for e in expiries]),
+        text=expiries, hovertemplate="%{text}<br>%{x:.1f} days<br>ATM IV %{y:.2f}%<extra></extra>"),
+        row=1, col=2)
+    f.update_xaxes(title_text="Strike", row=1, col=1)
+    f.update_yaxes(title_text="IV (%)", row=1, col=1)
+    f.update_xaxes(title_text="Days to expiry", rangemode="tozero", row=1, col=2)
+    f.update_yaxes(title_text="ATM IV (%)", row=1, col=2)
+    f.update_layout(title="Volatility smile and term structure", height=480,
+                    legend=dict(orientation="h", y=-0.2))
+    figs.append(f)
+
     # 2. greeks by strike (OTM side: put below forward, call above)
     f = make_subplots(rows=2, cols=2, subplot_titles=(
         "Delta (OTM option)", "Gamma per point", "Theta ₹/day per lot", "Vega ₹/vol-pt per lot"),
