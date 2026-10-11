@@ -3,10 +3,11 @@
 
 Reads a CSV of candles (one row per bar) for every contract in the chain and
 prints a BUY / SELL (short) signal per contract with an ATR stop-loss and a
-target set so that the reward is 1.5x the risk *after* transaction costs.
+target set so that the reward is 1.5x the risk *after* Motilal Oswal charges.
 
 Input columns:
-    side,strike,security_id,session,seq,open,high,low,close,volume
+    expiry,side,strike,security_id,session,seq,open,high,low,close,volume
+  expiry    YYYY-MM-DD
   side      CE | PE
   session   prev  (prior trading day's bars, used only for ATR)
             today (today's bars from 09:15, used for VWAP and ATR)
@@ -16,7 +17,7 @@ Rules
   VWAP      anchored at today's open, typical price (H+L+C)/3 x volume
   Signal    last close > VWAP -> BUY,  last close < VWAP -> SELL (short)
             "fresh" when the previous bar closed on the other side of VWAP
-  ATR       simple mean of true ranges over all bars supplied (prev + today)
+  ATR       simple mean of the last --atr-period true ranges (prev + today)
   Stop      entry -/+ 1 x ATR
   Target    placed so net profit = RR x net loss, both including charges
 """
@@ -28,16 +29,16 @@ from collections import defaultdict
 
 TICK = 0.05
 
-# Charges per executed order on Dhan for NSE index options. Rates change with
-# budgets and exchange circulars, so every one of them can be overridden.
+# Motilal Oswal F&O options plan, round trip (entry + exit order). Rates change
+# with budgets and exchange circulars, so every one of them can be overridden.
 DEFAULTS = {
     "lot_size": 65,
     "lots": 1,
-    "brokerage_per_order": 20.0,
-    "stt_sell": 0.0015,  # % of premium, sell side only
+    "brokerage_per_lot": 40.0,  # per lot, per executed order
+    "stt_sell": 0.0015,  # sell side, from 1-Apr-2026 (Budget 2026)
     "exchange_txn": 0.0003503,  # NSE options, on premium turnover
     "sebi": 10 / 1e7,  # Rs 10 per crore
-    "ipft": 5 / 1e6,  # NSE investor protection fund, Rs 50 per crore
+    "ipft": 0.0,  # NSE investor protection fund, not itemised by the broker
     "stamp_buy": 0.00003,  # buy side only
     "gst": 0.18,  # on brokerage + exchange + SEBI + IPFT
 }
@@ -46,7 +47,7 @@ DEFAULTS = {
 def charges(buy_px, sell_px, qty, c):
     buy_val, sell_val = buy_px * qty, sell_px * qty
     turnover = buy_val + sell_val
-    brokerage = 2 * c["brokerage_per_order"]
+    brokerage = 2 * c["brokerage_per_lot"] * c["lots"]
     exch = c["exchange_txn"] * turnover
     sebi = c["sebi"] * turnover
     ipft = c["ipft"] * turnover
@@ -69,7 +70,7 @@ def vwap(bars):
     return pv / vol if vol else None
 
 
-def atr(bars):
+def atr(bars, period):
     trs, prev_close = [], None
     for b in bars:
         tr = b["high"] - b["low"]
@@ -77,6 +78,7 @@ def atr(bars):
             tr = max(tr, abs(b["high"] - prev_close), abs(b["low"] - prev_close))
         trs.append(tr)
         prev_close = b["close"]
+    trs = trs[-period:]
     return sum(trs) / len(trs) if trs else None
 
 
@@ -108,7 +110,8 @@ def load(path):
     contracts = defaultdict(lambda: {"prev": [], "today": []})
     with open(path, newline="") as f:
         for r in csv.DictReader(f):
-            key = (r["side"].strip().upper(), float(r["strike"]), r["security_id"].strip())
+            key = (r["expiry"].strip(), r["side"].strip().upper(), float(r["strike"]),
+                   r["security_id"].strip())
             bar = {k: float(r[k]) for k in ("open", "high", "low", "close", "volume")}
             bar["seq"] = int(r["seq"])
             contracts[key][r["session"].strip().lower()].append(bar)
@@ -118,16 +121,16 @@ def load(path):
     return contracts
 
 
-def analyse(contracts, rr, min_volume, c):
+def analyse(contracts, rr, min_volume, atr_period, c):
     rows = []
-    for (side, strike, sid), s in contracts.items():
+    for (expiry, side, strike, sid), s in contracts.items():
         today = [b for b in s["today"] if b["volume"] > 0]
-        row = {"side": side, "strike": strike, "security_id": sid}
+        row = {"expiry": expiry, "side": side, "strike": strike, "security_id": sid}
         if not today:
             rows.append({**row, "signal": "NO DATA"})
             continue
         vw = vwap(today)
-        a = atr(s["prev"] + s["today"])
+        a = atr(s["prev"] + s["today"], atr_period)
         entry = today[-1]["close"]
         vol = sum(b["volume"] for b in today)
         if vw is None or not a:
@@ -154,18 +157,28 @@ def analyse(contracts, rr, min_volume, c):
     return rows
 
 
+def mark_changes(rows, path):
+    with open(path, newline="") as f:
+        before = {(r["expiry"], r["side"], r["security_id"]): r["signal"] for r in csv.DictReader(f)}
+    for r in rows:
+        old = before.get((r["expiry"], r["side"], r["security_id"]))
+        if r["signal"] not in ("BUY", "SELL") or old == r["signal"]:
+            continue
+        r["change"] = "FLIP" if old in ("BUY", "SELL") else "NEW"
+
+
 def fmt(v, nd=2):
     return "" if v is None or v == "" else f"{v:,.{nd}f}"
 
 
 def print_table(rows, out):
-    hdr = ["Strike", "Side", "Signal", "Fresh", "Entry", "VWAP", "ATR", "SL", "Target",
+    hdr = ["Expiry", "Strike", "Side", "Signal", "Change", "Fresh", "Entry", "VWAP", "ATR", "SL", "Target",
            "Net loss Rs", "Net profit Rs", "Net RR", "Volume", "Notes"]
     out.write("| " + " | ".join(hdr) + " |\n")
     out.write("|" + "---|" * len(hdr) + "\n")
     for r in rows:
         out.write("| " + " | ".join([
-            f"{r['strike']:.0f}", r["side"], r["signal"],
+            r["expiry"], f"{r['strike']:.0f}", r["side"], r["signal"], r.get("change", ""),
             "yes" if r.get("fresh") else "",
             fmt(r.get("entry")), fmt(r.get("vwap")), fmt(r.get("atr")),
             fmt(r.get("stop")), fmt(r.get("target")),
@@ -180,19 +193,24 @@ def main():
     p.add_argument("--rr", type=float, default=1.5)
     p.add_argument("--min-volume", type=float, default=50_000,
                    help="today's volume below this is flagged 'thin'")
+    p.add_argument("--atr-period", type=int, default=14)
+    p.add_argument("--prev-results", help="previous run's --csv-out, to mark NEW / FLIP")
     p.add_argument("--csv-out", help="also write results to this CSV")
     for k, v in DEFAULTS.items():
         p.add_argument("--" + k.replace("_", "-"), type=type(v), default=v)
     args = p.parse_args()
     c = {k: getattr(args, k) for k in DEFAULTS}
 
-    rows = analyse(load(args.candles), args.rr, args.min_volume, c)
+    rows = analyse(load(args.candles), args.rr, args.min_volume, args.atr_period, c)
+    if args.prev_results:
+        mark_changes(rows, args.prev_results)
     order = {"BUY": 0, "SELL": 0, "NEUTRAL": 1, "NO DATA": 2}
-    rows.sort(key=lambda r: (order[r["signal"]], r.get("notes", "") != "", -r.get("volume", 0)))
+    rows.sort(key=lambda r: (r["expiry"], order[r["signal"]], r.get("notes", "") != "",
+                             -r.get("volume", 0)))
     print_table(rows, sys.stdout)
 
     if args.csv_out:
-        keys = ["strike", "side", "security_id", "signal", "fresh", "entry", "vwap", "atr",
+        keys = ["expiry", "strike", "side", "change", "security_id", "signal", "fresh", "entry", "vwap", "atr",
                 "stop", "target", "net_loss", "net_profit", "net_rr", "volume", "notes"]
         with open(args.csv_out, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")
