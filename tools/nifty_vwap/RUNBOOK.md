@@ -6,7 +6,10 @@ Instructions for the Claude session that runs this every trading day from
 ## Scope
 
 - Underlying NIFTY (`UnderlyingScrip` 13, `UnderlyingSeg` `IDX_I`).
-- Every expiry from `expirylist` up to 31 December of the current year.
+- **10:00 cycle:** every expiry from `expirylist` up to 31 December of the
+  current year.
+- **15-minute refreshes (10:15–15:15):** only the 2 nearest expiries (fixed
+  at the 10:00 cycle for the whole day).
 - Every strike where the CE or PE has OI > 0 or LTP > 0 in that expiry's
   option chain, both CE and PE.
 - 15-minute candles only. Lot size 65, 1 lot, Motilal Oswal charges (defaults
@@ -67,10 +70,13 @@ At cycle time T, the bar that just closed starts at T−15 minutes and has
 `seq = (T − 15min − 09:15) / 15min`.
 
 1. If `candles.csv` or `ids.csv` is missing (the container was restarted),
-   rebuild them as in the first cycle, fetching today's bars in 5-bar windows
-   from 09:15.
-2. Fetch the window `[T−15min, T)` for every contract, split across up to
-   8 subagents as above, and append the bars to `candles.csv`.
+   rebuild them for the 2 nearest expiries as in the first cycle, fetching
+   today's bars in 5-bar windows from 09:15.
+2. Fetch the window `[T−15min, T)` for every contract of the 2 nearest
+   expiries, split across up to 8 subagents as above, and append the bars to
+   `candles.csv`. Run `signals.py` on those 2 expiries only: filter
+   `candles.csv` into `candles_near.csv` first, so the other expiries'
+   10:00 signals are not reported as current.
 3. Run `signals.py` with `--prev-results` pointing at the previous cycle's
    results file and `--csv-out data/<date>/results_<HHMM>.csv`.
 4. Report, then schedule the next cycle. Stop after the 15:15 cycle.
@@ -86,7 +92,7 @@ Each cycle, post in chat:
 - The time and the number of contracts analysed per expiry, plus any that
   came back with no data.
 - A table of the **NEW and FLIP signals** this cycle, liquid ones first
-  (no `thin` note), across all expiries.
+  (no `thin` note).
 - At 10:00, the top 10 BUY and top 10 SELL signals by volume for each expiry.
 - The path of the full results CSV.
 
