@@ -60,7 +60,8 @@
       },
       "status": "open",
       "alerts_sent": [
-        "2026-10-13|Recentre|P20261009-1 Iron condor 27-Oct 21600/21800 PE, 22900/23100 CE"
+        "2026-10-13|Recentre|P20261009-1 Iron condor 27-Oct 21600/21800 PE, 22900/23100 CE",
+        "2026-10-14|Recentre|P20261009-1 Iron condor 27-Oct 21600/21800 PE, 22900/23100 CE"
       ],
       "checks": [
         {
@@ -330,25 +331,57 @@
           "alerts": [
             "Recentre"
           ]
+        },
+        {
+          "time": "2026-10-14 12:16",
+          "spot": 22727.35,
+          "value": -5070.0,
+          "pnl": -289.25,
+          "delta": -6.91,
+          "ltps": {
+            "2026-10-27|21600|PE": 18.9,
+            "2026-10-27|21800|PE": 28.05,
+            "2026-10-27|22900|CE": 158.95,
+            "2026-10-27|23100|CE": 90.1
+          },
+          "alerts": [
+            "Recentre"
+          ]
+        },
+        {
+          "time": "2026-10-14 12:20",
+          "spot": 22727.35,
+          "value": -5070.0,
+          "pnl": -289.25,
+          "delta": -6.91,
+          "ltps": {
+            "2026-10-27|21600|PE": 18.9,
+            "2026-10-27|21800|PE": 28.05,
+            "2026-10-27|22900|CE": 158.95,
+            "2026-10-27|23100|CE": 90.1
+          },
+          "alerts": [
+            "Recentre"
+          ]
         }
       ],
       "last": {
-        "time": "2026-10-13 15:16",
-        "spot": 22702.05,
-        "value": -5658.25,
-        "pnl": -877.5,
-        "delta": -7.59,
+        "time": "2026-10-14 12:20",
+        "spot": 22727.35,
+        "value": -5070.0,
+        "pnl": -289.25,
+        "delta": -6.91,
         "ltps": {
-          "2026-10-27|21600|PE": 19.85,
-          "2026-10-27|21800|PE": 27.7,
-          "2026-10-27|22900|CE": 183.4,
-          "2026-10-27|23100|CE": 104.2
+          "2026-10-27|21600|PE": 18.9,
+          "2026-10-27|21800|PE": 28.05,
+          "2026-10-27|22900|CE": 158.95,
+          "2026-10-27|23100|CE": 90.1
         },
         "alerts": [
           {
             "level": "action",
             "kind": "Recentre",
-            "msg": "P20261009-1 Iron condor 27-Oct 21600/21800 PE, 22900/23100 CE: short 22900 CE under pressure (\u0394 0.45). Move the whole position +350 points to buy 2026-10-27 21900 PE @ 32.90; sell 2026-10-27 22000 PE @ 40.05; sell 2026-10-27 23200 CE @ 77.55; buy 2026-10-27 23400 CE @ 39.60: close for \u20b95,658, reopen for a credit of \u20b92,932, net debit \u20b92,727 before costs."
+            "msg": "P20261009-1 Iron condor 27-Oct 21600/21800 PE, 22900/23100 CE: short 22900 CE under pressure (\u0394 0.41). Move the whole position +300 points to buy 2026-10-27 21900 PE @ 34.95; sell 2026-10-27 22100 PE @ 53.70; sell 2026-10-27 23200 CE @ 65.75; buy 2026-10-27 23400 CE @ 33.80: close for \u20b95,070, reopen for a credit of \u20b93,296, net debit \u20b91,774 before costs."
           }
         ]
       }
