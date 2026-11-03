@@ -1,2 +1,4 @@
 tools/nifty_vwap/data/
 __pycache__/
+tools/ema_backtest/data_2024/windows_*.csv
+tools/ema_backtest/data_2024/daily_weeks.csv
