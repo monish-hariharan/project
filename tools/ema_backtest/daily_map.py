@@ -25,8 +25,8 @@ def main():
         with open(path, newline="") as f:
             for r in csv.DictReader(f):
                 d = r["date"].strip()
-                if r["window_start"].strip() == "09:15":
-                    status[d] = int(r["data_points"]) > 0
+                if r["window_start"].strip() in ("09:00", "09:15"):
+                    status[d] = status.get(d, False) or int(r["data_points"]) > 0
 
     weeks = defaultdict(list)
     points = {}
