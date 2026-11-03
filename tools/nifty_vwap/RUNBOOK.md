@@ -18,7 +18,11 @@ Instructions for the Claude session that runs this every trading day from
 ## Dhan MCP quirks (verified)
 
 - `historical_data_agent_tool` `intraday` returns a summary plus **only the
-  last 5 candles**, without timestamps. `toDate` is exclusive. A window that
+  last 5 candles**, without timestamps. **Both ends of the window are
+  exclusive on the candle start time**: a window from 09:15 does NOT include
+  the 09:15 candle. To get the candles starting at S, S+15, ... up to E, use
+  `fromDate` = S − 15 min and `toDate` = E + 15 min (verified against Dhan's
+  daily open: 09:00–10:30 returns the 09:15–10:15 candles). A window that
   returns fewer `Data Points` than expected has a gap, and the position of
   the missing bar is unknown, so refetch that window one 15-minute bar at a
   time to place each bar correctly.
@@ -43,7 +47,7 @@ Work in `tools/nifty_vwap/data/<YYYY-MM-DD>/` (git-ignored):
 
 ## First cycle (10:00)
 
-1. Check that the market is open: fetch today's 09:15–10:15 candles for one
+1. Check that the market is open: fetch today's 09:00–10:00 candles for one
    near-the-money contract. If it returns 0 data points, today is a holiday.
    Report that in one line and stop without scheduling anything.
 2. `expirylist`, then `optionchain` for each expiry in scope. Build the
@@ -51,10 +55,13 @@ Work in `tools/nifty_vwap/data/<YYYY-MM-DD>/` (git-ignored):
 3. Resolve IDs (one search per month and strike) into `ids.csv`.
 4. Split the contracts into up to 8 equal chunks and give each chunk to its
    own subagent (Agent tool, `general-purpose`) in parallel. Each subagent:
-   - **prev**: the previous trading day's last bars, window 14:30–15:45. If
+   - **prev**: the previous trading day's last 5 bars (14:15–15:15 candles),
+     window 14:00–15:30. If
      there are 0 points, step back one more weekday, up to 5 days. Store them
      as `session=prev` with `seq` 0.. in order.
-   - **today**: window 09:15–10:15, giving 3 bars, `seq` 0–2.
+   - **today**: window 09:00–10:00, giving the 09:15, 09:30 and 09:45 bars,
+     `seq` 0–2. (Do not extend `toDate` past 10:00: the 10:00 bar is still
+     forming.)
    - Writes `data/<date>/part_<k>.csv` with the header above. It transcribes
      the O/H/L/C/V numbers exactly, removing thousands separators.
    - Writes a contract with no candles as no rows. It does not invent bars.
@@ -71,8 +78,11 @@ At cycle time T, the bar that just closed starts at T−15 minutes and has
 
 1. If `candles.csv` or `ids.csv` is missing (the container was restarted),
    rebuild them for the 2 nearest expiries as in the first cycle, fetching
-   today's bars in 5-bar windows from 09:15.
-2. Fetch the window `[T−15min, T)` for every contract of the 2 nearest
+   today's closed bars in hourly windows 09:00–10:15, 10:00–11:15,
+   11:00–12:15, ... (each returns 4 candles: 09:15–10:00, 10:15–11:00, ...),
+   with the last window ending at T so the forming bar is excluded.
+2. Fetch the window `fromDate` = T − 30 min, `toDate` = T (returns just the
+   candle starting at T − 15) for every contract of the 2 nearest
    expiries, split across up to 8 subagents as above, and append the bars to
    `candles.csv`. Run `signals.py` on those 2 expiries only: filter
    `candles.csv` into `candles_near.csv` first, so the other expiries'

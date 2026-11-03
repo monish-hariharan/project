@@ -2,15 +2,19 @@
 """Stitch Dhan MCP window fetches into a validated 15-minute bars file.
 
 The Dhan MCP intraday tool returns at most the last 5 candles of a request and
-no timestamps. A session is therefore fetched as six 75-minute windows starting
-09:15, 10:15, ... 14:15, each of which returns 4 candles, giving 24 candles.
+no timestamps, and both ends of the requested window are exclusive (a window
+starting 09:15 does not include the 09:15 candle). A session (25 candles,
+09:15-15:15) is fetched as windows starting 09:00 (5 candles), 10:15, 11:15,
+12:15, 13:15, 14:15 (4 each). Older fetches used a 09:15 window (4 candles,
+09:30-10:15) plus a separate 09:00-09:30 window for the 09:15 candle; both
+layouts stitch in window order.
 
 Input (windows CSV): date,window_start,data_points,bar_idx,open,high,low,close
 Optional daily CSV (Dhan daily candles): date,open,high,low,close
 
 Checks, all reported:
   - each window's rows match its reported data_points
-  - every day has the same candle count (24)
+  - every day has 25 candles
   - OHLC consistency (high >= open/close >= low)
   - intraday gaps: a candle opening far from the previous close
   - stitched day high/low/open vs the daily candle, when given
@@ -21,7 +25,9 @@ import csv
 import sys
 from collections import defaultdict
 
-WINDOWS = ["09:15", "10:15", "11:15", "12:15", "13:15", "14:15"]
+WINDOWS = ["09:00", "09:15", "10:15", "11:15", "12:15", "13:15", "14:15"]
+REQUIRED = ["09:00", "10:15", "11:15", "12:15", "13:15", "14:15"]
+SESSION_CANDLES = 25
 
 
 def main():
@@ -50,13 +56,16 @@ def main():
         day = []
         for w in WINDOWS:
             if w not in reported[d]:
-                problems.append(f"{d} {w}: window missing")
+                if w in REQUIRED:
+                    problems.append(f"{d} {w}: window missing")
                 continue
             got = rows[d][w]
             if len(got) != reported[d][w] or sorted(got) != list(range(len(got))):
                 problems.append(f"{d} {w}: {len(got)} rows for {reported[d][w]} data points")
             day.extend(got[i] for i in sorted(got))
         counts[len(day)] += 1
+        if len(day) != SESSION_CANDLES:
+            problems.append(f"{d}: {len(day)} candles, expected {SESSION_CANDLES}")
         for i, b in enumerate(day):
             if not (b["high"] >= max(b["open"], b["close"]) and b["low"] <= min(b["open"], b["close"])):
                 problems.append(f"{d} candle {i}: OHLC inconsistent {b}")
