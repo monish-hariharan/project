@@ -38,9 +38,14 @@ def main():
                 weeks[w].append((int(r["idx"]), r))
 
     out, skipped = [], []
-    for w in sorted(weeks):
+    starts = sorted(weeks)
+    for n, w in enumerate(starts):
         start = dt.date.fromisoformat(w)
-        days = [(start + dt.timedelta(i)).isoformat() for i in range(5)]
+        stop = dt.date.fromisoformat(starts[n + 1]) if n + 1 < len(starts) else start + dt.timedelta(7)
+        span = [start + dt.timedelta(i) for i in range(min(7, (stop - start).days))]
+        # Weekdays must all be known; a weekend day counts only if it was fetched
+        # (special sessions, e.g. Saturday 20 Jan 2024).
+        days = [d.isoformat() for d in span if d.weekday() < 5 or d.isoformat() in status]
         days = [d for d in days if d <= max(status)] if status else []
         if not days or any(d not in status for d in days):
             skipped.append(f"{w}: intraday status incomplete")
